@@ -34,7 +34,7 @@ public:
         {
             fx (e).prepare (sr, maxBlock);
             onSmooth[e].prepare (sr, 15.0f);
-            onSmooth[e].snap (enabled[e] ? 1.0f : 0.0f);
+            onSmooth[e].snap (enabled[(size_t) e] ? 1.0f : 0.0f);
             for (auto& d : slotDry[e]) d.allocate (std::max (1, fx (e).latency()) + 4);
         }
         totalLatency = 0;

@@ -1,0 +1,71 @@
+# On every push: build for Apple Silicon, run the sound-engine tests, check the AU
+# passes Logic's validator (auval), then package a .pkg installer you can download.
+# Pushing a tag like v0.1.0 also creates a GitHub Release with the installer.
+
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache downloaded libraries (JUCE, Catch2)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'Tests/CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -B build -G Xcode
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Sound-engine tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Check it is built for Apple Silicon
+        run: |
+          ARCHS=$(lipo -archs "build/ProTunezFXToys_artefacts/Release/AU/ProTunez FX Toys.component/Contents/MacOS/ProTunez FX Toys")
+          echo "Architectures: $ARCHS"
+          [[ "$ARCHS" == *arm64* ]]
+
+      - name: Logic's AU validator (auval)
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/ProTunezFXToys_artefacts/Release/AU/ProTunez FX Toys.component" ~/Library/Audio/Plug-Ins/Components/
+          codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/ProTunez FX Toys.component"
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aufx PzFx Rvmd | tee auval.log
+          grep -q "AU VALIDATION SUCCEEDED" auval.log
+
+      - name: Package installer
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="${GITHUB_SHA::7}"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          chmod +x scripts/package.sh
+          scripts/package.sh "$VERSION"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProTunez-FX-Toys-${{ env.VERSION }}
+          path: dist/*.pkg
+
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.pkg

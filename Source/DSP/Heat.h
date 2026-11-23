@@ -19,7 +19,7 @@ public:
         for (int i = 0; i < kTaps; ++i)
         {
             const double n = i - kHalf;
-            const double sinc = n == 0 ? 0.5 : std::sin (0.5 * (double) kPi * n) / ((double) kPi * n);
+            const double sinc = i == kHalf ? 0.5 : std::sin (0.5 * (double) kPi * n) / ((double) kPi * n);
             const double w = 0.42 - 0.5 * std::cos (2.0 * (double) kPi * i / (kTaps - 1))
                            + 0.08 * std::cos (4.0 * (double) kPi * i / (kTaps - 1));
             h[i] = (float) (sinc * w);
