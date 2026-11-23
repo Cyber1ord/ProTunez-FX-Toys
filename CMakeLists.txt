@@ -49,6 +49,11 @@ if(PTFX_BUILD_PLUGIN)
         Source/PluginProcessor.cpp
         Source/PresetManager.cpp
         Source/FactoryPresets.cpp
+        Source/UI/Theme.cpp
+        Source/UI/Widgets.cpp
+        Source/UI/EffectView.cpp
+        Source/UI/Header.cpp
+        Source/UI/Views.cpp
         Source/PluginEditor.cpp)
 
     target_compile_definitions(ProTunezFXToys PUBLIC
@@ -65,4 +70,13 @@ endif()
 if(PTFX_BUILD_TESTS)
     enable_testing()
     add_subdirectory(Tests)
+endif()
+
+if(PTFX_BUILD_PLUGIN AND NOT APPLE)
+    # Linux-only helper: renders each screen to PNG for checking.
+    juce_add_console_app(Screenshots PRODUCT_NAME "Screenshots")
+    get_target_property(PTFX_SOURCES ProTunezFXToys SOURCES)
+    target_sources(Screenshots PRIVATE tools/Screenshots.cpp ${PTFX_SOURCES})
+    target_compile_definitions(Screenshots PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(Screenshots PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()

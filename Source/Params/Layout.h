@@ -13,6 +13,7 @@ inline Layout createLayout()
     juce::StringArray names;
     for (int i = 0; i < kNumEffects; ++i) names.add (effectName ((EffectId) i));
     addChoice (L, "effect", "Effect", names, 0);
+    addBool (L, "bypass", "Bypass", false);
     addHeatParams (L);
     addEchoParams (L);
     addPlateParams (L);

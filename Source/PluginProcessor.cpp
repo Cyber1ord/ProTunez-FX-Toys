@@ -101,6 +101,8 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     if (wanted != pending && ! fader.active()) { pending = wanted; fader.start(); }
     if (pending != running.load() && ! fader.active()) fader.start();
 
+    if (params::getb (apvts, "bypass")) return;
+
     float* l = buffer.getWritePointer (0);
     float* r;
     if (buffer.getNumChannels() >= 2) r = buffer.getWritePointer (1);
@@ -110,6 +112,10 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         r = monoScratch.getWritePointer (0);
         std::copy (l, l + n, r);
     }
+
+    float pin = 0.0f;
+    for (int i = 0; i < n; ++i) pin = std::max (pin, std::max (std::fabs (l[i]), std::fabs (r[i])));
+    inPeak.store (std::max (pin, inPeak.load() * 0.9f));
 
     if (! fader.active())
     {
@@ -142,6 +148,10 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (m < n) runEffect (getRunningEffect(), l + m, r + m, n - m);
         for (int i = 0; i < m; ++i) { l[i] *= gains[i]; r[i] *= gains[i]; }
     }
+
+    float pout = 0.0f;
+    for (int i = 0; i < n; ++i) pout = std::max (pout, std::max (std::fabs (l[i]), std::fabs (r[i])));
+    outPeak.store (std::max (pout, outPeak.load() * 0.9f));
 
     if (buffer.getNumChannels() < 2)
         for (int i = 0; i < n; ++i) l[i] = 0.5f * (l[i] + r[i]);

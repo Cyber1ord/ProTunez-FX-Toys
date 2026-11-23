@@ -41,6 +41,9 @@ public:
     ptfx::EffectId getRunningEffect() const { return (ptfx::EffectId) running.load(); }
     /** The running effect's meter value (0..1). */
     float getMeter() const;
+    /** Peak levels for the IN/OUT meters. */
+    std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };
+    juce::AudioProcessorParameter* getBypassParameter() const override { return apvts.getParameter ("bypass"); }
 
     juce::UndoManager undo;
     juce::AudioProcessorValueTreeState apvts;
