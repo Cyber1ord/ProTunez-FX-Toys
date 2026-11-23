@@ -35,7 +35,7 @@ public:
         steps.pop_back();
         auto& ps = proc.getParameters();
         for (size_t i = 0; i < snap.size() && i < (size_t) ps.size(); ++i)
-            if (ps[(int) i]->getValue() != snap[i])
+            if (std::abs (ps[(int) i]->getValue() - snap[i]) > 1.0e-7f)
             {
                 ps[(int) i]->beginChangeGesture();
                 ps[(int) i]->setValueNotifyingHost (snap[i]);
