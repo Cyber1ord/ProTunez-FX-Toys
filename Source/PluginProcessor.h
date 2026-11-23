@@ -4,6 +4,7 @@
 #include "DSP/Heat.h"
 #include "DSP/Plate.h"
 #include "EffectIds.h"
+#include "PresetManager.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -43,6 +44,7 @@ public:
 
     juce::UndoManager undo;
     juce::AudioProcessorValueTreeState apvts;
+    ptfx::PresetManager presets { apvts, [this] { return getActiveEffect(); } };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 

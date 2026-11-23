@@ -13,10 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(PTFX_BUILD_PLUGIN "Build the plugin (needs JUCE)" ON)
 option(PTFX_BUILD_TESTS "Build the sound-engine tests" ON)
 
-if(PTFX_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(Tests)
-endif()
+
 
 if(PTFX_BUILD_PLUGIN)
     include(FetchContent)
@@ -50,6 +47,8 @@ if(PTFX_BUILD_PLUGIN)
 
     target_sources(ProTunezFXToys PRIVATE
         Source/PluginProcessor.cpp
+        Source/PresetManager.cpp
+        Source/FactoryPresets.cpp
         Source/PluginEditor.cpp)
 
     target_compile_definitions(ProTunezFXToys PUBLIC
@@ -61,4 +60,9 @@ if(PTFX_BUILD_PLUGIN)
     target_link_libraries(ProTunezFXToys
         PRIVATE juce::juce_audio_utils juce::juce_dsp
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
+endif()
+
+if(PTFX_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(Tests)
 endif()

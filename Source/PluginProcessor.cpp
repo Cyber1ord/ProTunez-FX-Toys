@@ -1,22 +1,10 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "Params/EchoParams.h"
-#include "Params/HeatParams.h"
-#include "Params/PlateParams.h"
+#include "Params/Layout.h"
 
 using namespace ptfx;
 
-juce::AudioProcessorValueTreeState::ParameterLayout ProTunezFXToysProcessor::createLayout()
-{
-    params::Layout L;
-    juce::StringArray names;
-    for (int i = 0; i < kNumEffects; ++i) names.add (effectName ((EffectId) i));
-    params::addChoice (L, "effect", "Effect", names, 0);
-    params::addHeatParams (L);
-    params::addEchoParams (L);
-    params::addPlateParams (L);
-    return L;
-}
+juce::AudioProcessorValueTreeState::ParameterLayout ProTunezFXToysProcessor::createLayout() { return params::createLayout(); }
 
 ProTunezFXToysProcessor::ProTunezFXToysProcessor()
     : AudioProcessor (BusesProperties()
