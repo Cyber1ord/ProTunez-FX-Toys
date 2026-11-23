@@ -229,58 +229,217 @@ TEST_CASE ("Heat: the attitude meter rises with Drive")
     REQUIRE (meterAt (10.0f) <= 1.0f);
 }
 
-TEST_CASE ("Echo: an impulse comes back after the set time")
+namespace
 {
-    Echo e;
-    Echo::Params p; p.timeMs = 100.0f; p.feedback = 0.0f; p.mix = 1.0f; p.style = Echo::digital; p.wobble = 0.0f;
-    p.saturation = 0.0f; p.lowCutHz = 20.0f; p.highCutHz = 20000.0f;
-    e.setParams (p); e.prepare (kSr, kBlock);
-    Stereo s (12000);
+Echo::Params dryEcho()
+{
+    Echo::Params p;
+    p.mode = Echo::single; p.timeMode = Echo::timeMs; p.timeMs = 100.0f; p.feedback = 0.0f; p.mix = 1.0f;
+    p.saturation = 0.0f; p.lowCutHz = 20.0f; p.highCutHz = 20000.0f; p.groove = 0.0f; p.feel = 0.0f;
+    p.width = 0.0f; p.prime = false; p.style = Echo::StyleEdit::clean(); p.duck = 0.0f; p.freeze = false;
+    return p;
+}
+
+std::vector<size_t> peaksAbove (const std::vector<float>& v, float thresh, size_t minGap)
+{
+    std::vector<size_t> out;
+    for (size_t i = 1; i + 1 < v.size(); ++i)
+        if (std::fabs (v[i]) > thresh && std::fabs (v[i]) >= std::fabs (v[i - 1]) && std::fabs (v[i]) >= std::fabs (v[i + 1]))
+            if (out.empty() || i - out.back() > minGap) out.push_back (i);
+    return out;
+}
+
+Stereo impulseThrough (Echo& e, int n)
+{
+    Stereo s (n);
     s.l[0] = s.r[0] = 1.0f;
     run (e, s);
-    size_t best = 0; float bestV = 0.0f;
-    for (size_t i = 0; i < s.l.size(); ++i) if (std::fabs (s.l[i]) > bestV) { bestV = std::fabs (s.l[i]); best = i; }
-    REQUIRE ((int) best == Approx (4800).margin (3));
-    REQUIRE (bestV > 0.5f);
+    return s;
 }
 
-TEST_CASE ("Echo: tempo sync follows the host tempo")
+bool isPrime (int n) { if (n < 2) return false; for (int d = 2; d * d <= n; ++d) if (n % d == 0) return false; return true; }
+} // namespace
+
+TEST_CASE ("Echo: an impulse comes back after the set time")
 {
-    Echo e;
-    Echo::Params p; p.sync = true; p.division = 8; // quarter note
-    e.setParams (p); e.prepare (kSr, kBlock);
+    Echo e; e.setParams (dryEcho()); e.prepare (kSr, kBlock);
+    auto s = impulseThrough (e, 12000);
+    auto pk = peaksAbove (s.l, 0.3f, 100);
+    REQUIRE (pk.size() == 1);
+    REQUIRE ((int) pk[0] == Approx (4800).margin (2));
+}
+
+TEST_CASE ("Echo: Prime Numbers moves the echo to a prime number of samples")
+{
+    auto p = dryEcho(); p.prime = true;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto pk = peaksAbove (impulseThrough (e, 12000).l, 0.3f, 100);
+    REQUIRE (pk.size() == 1);
+    REQUIRE (isPrime (Echo::nearestPrime (4800)));
+    REQUIRE ((int) pk[0] == Approx (Echo::nearestPrime (4800)).margin (1));
+    REQUIRE (std::abs (Echo::nearestPrime (4800) - 4800) <= 10);
+}
+
+TEST_CASE ("Echo: note, dotted and triplet times follow the tempo")
+{
+    auto p = dryEcho(); p.timeMode = Echo::timeNote; p.note = Echo::noteQuarter;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
     e.setTempo (120.0);
-    REQUIRE (e.currentTimeMs() == Approx (500.0f));
-    e.setTempo (100.0);
-    REQUIRE (e.currentTimeMs() == Approx (600.0f));
+    REQUIRE (e.echoTimeMs (0) == Approx (500.0f));
+    p.timeMode = Echo::timeDot; e.setParams (p);
+    REQUIRE (e.echoTimeMs (0) == Approx (750.0f));
+    p.timeMode = Echo::timeTrip; e.setParams (p);
+    REQUIRE (e.echoTimeMs (0) == Approx (1000.0f / 3.0f).margin (0.01));
 }
 
-TEST_CASE ("Echo: full feedback in every style and mode never blows up")
+TEST_CASE ("Echo: with no tempo from the host, synced times use 120 BPM")
 {
-    for (int style = 0; style < Echo::numStyles; ++style)
-        for (int mode = 0; mode < Echo::numModes; ++mode)
+    auto p = dryEcho(); p.timeMode = Echo::timeNote; p.note = Echo::noteQuarter;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    e.setTempo (0.0);
+    REQUIRE (e.echoTimeMs (0) == Approx (500.0f));
+}
+
+TEST_CASE ("Echo: Groove shifts every other repeat (shuffle and swing)")
+{
+    auto p = dryEcho(); p.feedback = 0.7f; p.groove = 1.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto pk = peaksAbove (impulseThrough (e, 20000).l, 0.2f, 500);
+    REQUIRE (pk.size() >= 3);
+    REQUIRE ((int) pk[0] == Approx (4800 - 1600).margin (3));
+    REQUIRE ((int) pk[1] == Approx (9600).margin (3));
+    REQUIRE ((int) pk[2] == Approx (9600 + 3200).margin (3));
+}
+
+TEST_CASE ("Echo: Feel moves the echoes ahead of or behind the beat by up to 25 ms")
+{
+    auto p = dryEcho(); p.feel = 1.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto pk = peaksAbove (impulseThrough (e, 12000).l, 0.3f, 100);
+    REQUIRE ((int) pk[0] == Approx (4800 - 1200).margin (2));
+    p.feel = -1.0f; e.setParams (p); e.reset();
+    pk = peaksAbove (impulseThrough (e, 12000).l, 0.3f, 100);
+    REQUIRE ((int) pk[0] == Approx (4800 + 1200).margin (2));
+}
+
+TEST_CASE ("Echo: Ping-Pong bounces repeats from side to side")
+{
+    auto p = dryEcho(); p.mode = Echo::pingPong; p.feedback = 0.6f; p.width = 1.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto s = impulseThrough (e, 12000);
+    REQUIRE (peak (s.l, 4700, 4900) > 3.0f * peak (s.r, 4700, 4900));
+    REQUIRE (peak (s.r, 9500, 9700) > 3.0f * peak (s.l, 9500, 9700));
+}
+
+TEST_CASE ("Echo: Dual mode runs two echoes with their own times")
+{
+    auto p = dryEcho(); p.mode = Echo::dual; p.timeMs = 100.0f; p.time2Ms = 150.0f; p.width = 1.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto s = impulseThrough (e, 12000);
+    auto l = peaksAbove (s.l, 0.3f, 100), r = peaksAbove (s.r, 0.3f, 100);
+    REQUIRE (l.size() == 1); REQUIRE (r.size() == 1);
+    REQUIRE ((int) l[0] == Approx (4800).margin (2));
+    REQUIRE ((int) r[0] == Approx (7200).margin (2));
+}
+
+TEST_CASE ("Echo: Rhythm mode plays the taps of the pattern")
+{
+    auto p = dryEcho(); p.mode = Echo::rhythm; p.rhythmBeats = 2; p.shape = Echo::shapeFlat; p.panShape = Echo::panCenter;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock); e.setTempo (120.0);
+    RhythmPattern pat; pat.count = 4;
+    for (int i = 0; i < 4; ++i) pat.taps[(size_t) i] = { 0.25f * (float) (i + 1), 1.0f };
+    e.setPattern (pat);
+    auto pk = peaksAbove (impulseThrough (e, 30000).l, 0.2f, 1000);
+    REQUIRE (pk.size() == 4);
+    for (int i = 0; i < 4; ++i) REQUIRE ((int) pk[(size_t) i] == Approx (6000 * (i + 1)).margin (3));
+}
+
+TEST_CASE ("Echo: the Decay shape makes each tap quieter than the last")
+{
+    auto lv = Echo::shapeLevels (Echo::shapeDecay, 8);
+    for (size_t i = 1; i < lv.size(); ++i) REQUIRE (lv[i] < lv[i - 1]);
+    auto sw = Echo::shapeLevels (Echo::shapeReverse, 8);
+    for (size_t i = 1; i < sw.size(); ++i) REQUIRE (sw[i] > sw[i - 1]);
+}
+
+TEST_CASE ("Echo: there are 30 styles and the Telephone style cuts the bass")
+{
+    REQUIRE (Echo::numStyles() == 30);
+    auto bassLevel = [] (const char* name)
+    {
+        auto p = dryEcho();
+        Echo::applyStyle (p, Echo::styleIndex (name));
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine (48000, 100.0f, 0.1f);
+        run (e, s);
+        return rms (s.l, 24000, 48000);
+    };
+    REQUIRE (Echo::styleIndex ("Telephone") >= 0);
+    REQUIRE (gainToDb (bassLevel ("Telephone") / bassLevel ("Clean Digital")) < -20.0f);
+}
+
+TEST_CASE ("Echo: Duck turns the echoes down while you sing")
+{
+    auto level = [] (float duck)
+    {
+        auto p = dryEcho(); p.duck = duck; p.feedback = 0.3f;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine (48000, 500.0f, 0.5f);
+        run (e, s);
+        return rms (s.l, 24000, 48000);
+    };
+    REQUIRE (gainToDb (level (1.0f) / level (0.0f)) <= -12.0f);
+}
+
+TEST_CASE ("Echo: Freeze holds the echoes at a steady level")
+{
+    auto p = dryEcho(); p.timeMs = 300.0f; p.feedback = 0.5f; p.style.wobDepth = 0.5f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    const int n = (int) kSr * 11;
+    Stereo s ((int) (kSr * 0.6));
+    for (int i = 0; i < (int) kSr / 2; ++i) s.l[(size_t) i] = s.r[(size_t) i] = 0.3f * std::sin ((float) i * 0.05f) * std::sin ((float) i * 0.0013f);
+    run (e, s); // fill
+    p.freeze = true; e.setParams (p);
+    Stereo t (n);
+    run (e, t);
+    const float early = rms (t.l, (size_t) kSr, (size_t) kSr * 2), late = rms (t.l, (size_t) kSr * 9, (size_t) kSr * 10);
+    REQUIRE (early > 1.0e-3f);
+    REQUIRE (std::fabs (gainToDb (late / early)) < 3.0f);
+}
+
+TEST_CASE ("Echo: feedback above 100 % stays bounded in every mode and saturation type")
+{
+    for (int mode = 0; mode < Echo::numModes; ++mode)
+        for (int sat = 0; sat < Echo::numSatTypes; ++sat)
         {
-            Echo e;
-            Echo::Params p; p.style = style; p.mode = mode; p.feedback = 1.0f; p.timeMs = 50.0f; p.saturation = 1.0f; p.wobble = 1.0f;
-            e.setParams (p); e.prepare (kSr, kBlock);
-            auto s = sine (48000 * 4, 300.0f, 0.9f);
+            auto p = dryEcho(); p.mode = mode; p.feedback = 1.1f; p.saturation = 0.5f; p.timeMs = 50.0f;
+            p.style.satType = sat; p.style.wobDepth = 1.0f; p.style.diffAmount = 1.0f; p.style.diffLoop = true; p.groove = 0.5f;
+            Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+            auto s = sine ((int) kSr * 4, 300.0f, 0.5f);
             run (e, s);
             REQUIRE (allFinite (s));
-            REQUIRE (peak (s.l) < 8.0f);
+            REQUIRE (peak (s.l) < 4.0f);
         }
 }
 
-TEST_CASE ("Echo: ping-pong sends the first repeat to one side")
+TEST_CASE ("Echo: one minute at 110 % feedback stays below +12 dBFS")
 {
-    Echo e;
-    Echo::Params p; p.mode = Echo::pingPong; p.timeMs = 50.0f; p.feedback = 0.5f; p.mix = 1.0f; p.style = Echo::digital; p.wobble = 0.0f;
-    e.setParams (p); e.prepare (kSr, kBlock);
-    Stereo s (12000);
-    s.l[0] = s.r[0] = 1.0f;
+    auto p = dryEcho(); p.feedback = 1.1f; p.saturation = 0.3f; p.timeMs = 230.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto s = sine ((int) kSr * 60, 220.0f, 0.5f);
     run (e, s);
-    // First repeat (~2400) mostly left, second (~4800) mostly right.
-    REQUIRE (peak (s.l, 2300, 2500) > 2.0f * peak (s.r, 2300, 2500));
-    REQUIRE (peak (s.r, 4700, 4900) > 2.0f * peak (s.l, 4700, 4900));
+    REQUIRE (allFinite (s));
+    REQUIRE (peak (s.l) < dbToGain (12.0f));
+}
+
+TEST_CASE ("Echo: long times at 192 kHz stay in range")
+{
+    auto p = dryEcho(); p.timeMs = 2500.0f; p.mode = Echo::single; p.lrOffsetMs = 25.0f; p.width = 1.0f; p.feedback = 0.9f;
+    Echo e; e.setParams (p); e.prepare (192000.0, 512);
+    std::vector<float> l (192000 * 3, 0.0f), r (l.size(), 0.0f);
+    l[0] = r[0] = 1.0f;
+    for (size_t i = 0; i < l.size(); i += 512) e.process (l.data() + i, r.data() + i, (int) std::min<size_t> (512, l.size() - i));
+    for (float v : l) REQUIRE (std::isfinite (v));
 }
 
 TEST_CASE ("Plate: makes a tail that dies away and stays stable at maximum decay")

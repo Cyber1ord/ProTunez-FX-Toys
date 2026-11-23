@@ -4,7 +4,7 @@ namespace ptfx::ui
 {
 void TweakPanel::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xf0101115));
+    g.setColour (juce::Colour (0xff101115));
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 10.0f);
     g.setColour (colour.withAlpha (0.5f));
     g.drawLine (12.0f, 0.5f, (float) getWidth() - 12.0f, 0.5f, 1.0f);

@@ -95,6 +95,15 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             if (auto b = pos->getBpm()) if (*b > 0.0) bpm = *b;
     for (int i = 0; i < kNumEffects; ++i)
         if (auto* e = engine ((EffectId) i)) e->setTempo (bpm);
+    // Echo can run from its own Tap tempo instead of the host.
+    const double eb = params::getb (apvts, "echo_usehost") ? bpm : (double) params::get (apvts, "echo_bpm");
+    echo.setTempo (eb);
+    echoBpm.store (eb);
+    if (patternDirty.load())
+    {
+        const juce::SpinLock::ScopedTryLockType lock (patternLock);
+        if (lock.isLocked()) { echo.setPattern (pendingPattern); patternDirty.store (false); }
+    }
 
     // Menu changed: start a fade-out, swap at silence, fade in.
     const int wanted = (int) getActiveEffect();
@@ -157,6 +166,40 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         for (int i = 0; i < n; ++i) l[i] = 0.5f * (l[i] + r[i]);
 }
 
+static juce::String patternToString (const RhythmPattern& p)
+{
+    juce::StringArray parts;
+    for (int i = 0; i < p.count; ++i) parts.add (juce::String (p.taps[(size_t) i].pos, 4) + ":" + juce::String (p.taps[(size_t) i].level, 3));
+    return parts.joinIntoString (";");
+}
+
+static RhythmPattern patternFromString (const juce::String& s)
+{
+    RhythmPattern p;
+    for (auto& t : juce::StringArray::fromTokens (s, ";", ""))
+    {
+        if (p.count >= 16) break;
+        const auto bits = juce::StringArray::fromTokens (t, ":", "");
+        if (bits.size() == 2) p.taps[(size_t) p.count++] = { bits[0].getFloatValue(), juce::jlimit (0.0f, 1.0f, bits[1].getFloatValue()) };
+    }
+    return p;
+}
+
+void ProTunezFXToysProcessor::setEchoPattern (const RhythmPattern& p)
+{
+    {
+        const juce::SpinLock::ScopedLockType lock (patternLock);
+        pendingPattern = p;
+    }
+    patternDirty.store (true);
+    apvts.state.setProperty ("echoPattern", patternToString (p), nullptr);
+}
+
+RhythmPattern ProTunezFXToysProcessor::getEchoPattern() const
+{
+    return patternFromString (apvts.state.getProperty ("echoPattern").toString());
+}
+
 void ProTunezFXToysProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, destData);
@@ -167,7 +210,11 @@ void ProTunezFXToysProcessor::setStateInformation (const void* data, int sizeInB
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
     {
         auto state = juce::ValueTree::fromXml (*xml);
-        if (state.hasType (apvts.state.getType())) apvts.replaceState (state);
+        if (state.hasType (apvts.state.getType()))
+        {
+            apvts.replaceState (state);
+            setEchoPattern (getEchoPattern());
+        }
     }
 }
 

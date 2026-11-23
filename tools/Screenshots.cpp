@@ -27,11 +27,33 @@ int main (int argc, char** argv)
                 openTweak (*ed);
                 if (! any) continue;
             }
-            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
-            const auto name = juce::String (i + 1) + "-" + juce::String (ptfx::effectName ((ptfx::EffectId) i)).removeCharacters (" ").toLowerCase() + (tweak ? "-tweak" : "") + ".png";
-            juce::FileOutputStream os (out.getChildFile (name));
-            os.setPosition (0); os.truncate();
-            juce::PNGImageFormat().writeImageToStream (img, os);
+            const auto base = juce::String (i + 1) + "-" + juce::String (ptfx::effectName ((ptfx::EffectId) i)).removeCharacters (" ").toLowerCase();
+            auto shoot = [&] (const juce::String& suffix)
+            {
+                auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
+                juce::FileOutputStream os (out.getChildFile (base + suffix + ".png"));
+                os.setPosition (0); os.truncate();
+                juce::PNGImageFormat().writeImageToStream (img, os);
+            };
+            shoot (tweak ? "-tweak" : "");
+            if (tweak)
+            {
+                // Extra shots for each Tweak tab, if the screen has tabs.
+                std::function<void (juce::Component&)> tabs = [&] (juce::Component& c)
+                {
+                    for (auto* ch : c.getChildren())
+                    {
+                        if (auto* b = dynamic_cast<juce::TextButton*> (ch))
+                            if (b->getButtonText() == "STYLE EDIT" || b->getButtonText() == "RHYTHM EDITOR" || b->getButtonText() == "EQ")
+                            {
+                                if (b->onClick) b->onClick();
+                                shoot ("-tweak-" + b->getButtonText().removeCharacters (" ").toLowerCase());
+                            }
+                        tabs (*ch);
+                    }
+                };
+                tabs (*ed);
+            }
         }
     }
     return 0;

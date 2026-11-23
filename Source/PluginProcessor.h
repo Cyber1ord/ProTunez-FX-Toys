@@ -45,6 +45,12 @@ public:
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };
     juce::AudioProcessorParameter* getBypassParameter() const override { return apvts.getParameter ("bypass"); }
 
+    /** Echo's custom rhythm pattern (from the Rhythm editor). Message thread only. */
+    void setEchoPattern (const ptfx::RhythmPattern& p);
+    ptfx::RhythmPattern getEchoPattern() const;
+    /** Tempo Echo is using right now (host or its own Tap tempo). */
+    double getEchoBpm() const { return echoBpm.load(); }
+
     juce::UndoManager undo;
     juce::AudioProcessorValueTreeState apvts;
     ptfx::PresetManager presets { apvts, [this] { return getActiveEffect(); } };
@@ -62,6 +68,10 @@ private:
     ptfx::Crossfader fader;
     std::atomic<int> running { 0 };
     int pending = 0;
+    juce::SpinLock patternLock;
+    ptfx::RhythmPattern pendingPattern;
+    std::atomic<bool> patternDirty { false };
+    std::atomic<double> echoBpm { 120.0 };
     double sr = 44100.0;
     juce::AudioBuffer<float> monoScratch;
 

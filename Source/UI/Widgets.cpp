@@ -160,6 +160,7 @@ Choice::Choice (APVTS& s, const juce::String& id, juce::Colour colour)
 Led::Led (std::function<juce::String()> t, juce::Colour c, float fs) : textFn (std::move (t)), colour (c), size (fs)
 {
     setInterceptsMouseClicks (false, false);
+    shown = textFn();
     startTimerHz (15);
 }
 
