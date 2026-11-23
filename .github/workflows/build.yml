@@ -1,13 +1,12 @@
 # On every push: build for Apple Silicon, run the sound-engine tests, check the AU
 # passes Logic's validator (auval), then package a .pkg installer you can download.
-# Pushing a tag like v0.1.0 also creates a GitHub Release with the installer.
+# When the version in CMakeLists.txt goes up, the build on main publishes a GitHub Release.
 
 name: Build
 
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -51,10 +50,21 @@ jobs:
           auval -v aufx PzFx Rvmd | tee auval.log
           grep -q "AU VALIDATION SUCCEEDED" auval.log
 
+      - name: Work out the version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APP_VERSION=$(sed -n 's/^project(ProTunezFXToys VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          # Publish only from main, and only if this version has no release yet.
+          if [[ "$GITHUB_REF" == refs/heads/main ]] && ! gh release view "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "PUBLISH=1" >> "$GITHUB_ENV"; echo "VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          else
+            echo "PUBLISH=0" >> "$GITHUB_ENV"; echo "VERSION=$APP_VERSION-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
       - name: Package installer
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="${GITHUB_SHA::7}"; fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           chmod +x scripts/package.sh
           scripts/package.sh "$VERSION"
 
@@ -64,8 +74,15 @@ jobs:
           name: ProTunez-FX-Toys-${{ env.VERSION }}
           path: dist/*.pkg
 
-      - name: Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release (new versions only)
+        if: env.PUBLISH == '1'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: ProTunez FX Toys ${{ env.APP_VERSION }}
+          target_commitish: ${{ github.sha }}
           files: dist/*.pkg
+          body: |
+            Apple Silicon Macs only. Download the .pkg below and double-click it
+            (if macOS blocks it: right-click, then Open). In Logic: Audio FX → Audio Units →
+            The Revivalists Media → ProTunez FX Toys.
