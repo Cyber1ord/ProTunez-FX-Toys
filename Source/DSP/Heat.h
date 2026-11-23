@@ -1,77 +1,10 @@
 // ProTunez FX Toys — "Heat" (like Decapitator): analog-style saturation from warmth to destruction.
 #pragma once
 
-#include "Common.h"
+#include "Analog.h"
 
 namespace ptfx
 {
-/** 2x oversampler (windowed-sinc FIR) so the distortion stays clean at high drive. */
-class Oversampler2x
-{
-public:
-    static constexpr int kTaps = 63;              // odd, linear phase
-    static constexpr int kHalf = (kTaps - 1) / 2; // 31
-
-    Oversampler2x()
-    {
-        // Low-pass at a quarter of the oversampled rate (= the original Nyquist), Blackman window.
-        double sum = 0.0;
-        for (int i = 0; i < kTaps; ++i)
-        {
-            const double n = i - kHalf;
-            const double sinc = i == kHalf ? 0.5 : std::sin (0.5 * (double) kPi * n) / ((double) kPi * n);
-            const double w = 0.42 - 0.5 * std::cos (2.0 * (double) kPi * i / (kTaps - 1))
-                           + 0.08 * std::cos (4.0 * (double) kPi * i / (kTaps - 1));
-            h[i] = (float) (sinc * w);
-            sum += h[i];
-        }
-        for (auto& c : h) c = (float) (c / sum);
-        reset();
-    }
-
-    void reset()
-    {
-        std::fill (std::begin (up), std::end (up), 0.0f);
-        std::fill (std::begin (down), std::end (down), 0.0f);
-        upPos = downPos = 0;
-    }
-
-    void upsample (float x, float& o0, float& o1)
-    {
-        // Zero first, then the sample: keeps the total delay a whole number of samples.
-        push (up, upPos, 0.0f);
-        o0 = convolve (up, upPos);
-        push (up, upPos, 2.0f * x);
-        o1 = convolve (up, upPos);
-    }
-
-    float downsample (float a, float b)
-    {
-        push (down, downPos, a);
-        push (down, downPos, b);
-        return convolve (down, downPos);
-    }
-
-    static constexpr int latency() { return kHalf; }
-
-private:
-    float h[kTaps] {};
-    float up[kTaps] {}, down[kTaps] {};
-    int upPos = 0, downPos = 0;
-
-    static void push (float* buf, int& pos, float x) { buf[pos] = x; pos = (pos + 1) % kTaps; }
-    float convolve (const float* buf, int pos) const
-    {
-        float acc = 0.0f;
-        for (int i = 0; i < kTaps; ++i)
-        {
-            pos = pos == 0 ? kTaps - 1 : pos - 1; // newest first
-            acc += h[i] * buf[pos];
-        }
-        return acc;
-    }
-};
-
 class Heat : public Effect
 {
 public:

@@ -5,7 +5,7 @@ FetchContent_Declare(Catch2
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(Catch2)
 
-add_executable(DSPTests DSPTests.cpp)
+add_executable(DSPTests DSPTests.cpp AnalogTests.cpp)
 target_compile_features(DSPTests PRIVATE cxx_std_17)
 target_link_libraries(DSPTests PRIVATE Catch2::Catch2WithMain)
 
