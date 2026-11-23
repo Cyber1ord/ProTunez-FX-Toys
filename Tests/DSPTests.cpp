@@ -1,5 +1,7 @@
 // Tests for the ProTunez FX Toys sound engines. Run on any computer (no JUCE needed).
-#include "../Source/DSP/Rack.h"
+#include "../Source/DSP/Echo.h"
+#include "../Source/DSP/Heat.h"
+#include "../Source/DSP/Plate.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -212,80 +214,24 @@ TEST_CASE ("Plate: the reverb is stereo (left and right differ)")
     REQUIRE (diff > 1.0);
 }
 
-TEST_CASE ("Squeeze: loud signals are turned down by about the ratio")
-{
-    Squeeze c;
-    Squeeze::Params p; p.thresholdDb = -20.0f; p.ratio = 4.0f; p.kneeDb = 0.0f; p.attackMs = 1.0f; p.releaseMs = 50.0f;
-    p.sidechainHpHz = 20.0f;
-    c.setParams (p); c.prepare (kSr, kBlock);
-    auto s = sine (48000, 1000.0f, dbToGain (-4.0f)); // 16 dB over
-    run (c, s);
-    const float outDb = gainToDb (peak (s.l, 24000));
-    REQUIRE (outDb == Approx (-20.0f + 16.0f / 4.0f).margin (1.5f));
-    REQUIRE (c.gainReductionDb.load() < -10.0f);
-}
 
-TEST_CASE ("Squeeze: quiet signals below threshold pass unchanged")
+TEST_CASE ("Crossfader: switching effects ramps smoothly, never jumps")
 {
-    Squeeze c;
-    Squeeze::Params p; p.thresholdDb = -10.0f; p.kneeDb = 0.0f;
-    c.setParams (p); c.prepare (kSr, kBlock);
-    auto in = sine (24000, 1000.0f, dbToGain (-30.0f));
-    auto s = in;
-    run (c, s);
-    for (size_t i = 0; i < in.l.size(); ++i) REQUIRE (s.l[i] == Approx (in.l[i]).margin (1.0e-6));
-}
-
-namespace
-{
-struct RackFx : Effect
-{
-    Rack rack;
-    void prepare (double sr, int b) override { rack.prepare (sr, b); }
-    void reset() override { rack.reset(); }
-    void process (float* l, float* r, int n) override { rack.process (l, r, n); }
-};
-} // namespace
-
-TEST_CASE ("Rack: everything switched off gives back the input, in time")
-{
-    RackFx r;
-    for (int e = 0; e < Rack::numEffects; ++e) r.rack.setEnabled (e, false);
-    r.prepare (kSr, kBlock);
-    auto in = sine (9600, 440.0f, 0.5f);
-    auto s = in;
-    run (r, s);
-    const int lat = r.rack.latency();
-    REQUIRE (lat == Oversampler2x::latency());
-    for (size_t i = 1000; i < in.l.size(); ++i) REQUIRE (s.l[i] == Approx (in.l[i - (size_t) lat]).margin (1.0e-5));
-}
-
-TEST_CASE ("Rack: global Mix at zero gives back the input even with effects on")
-{
-    RackFx r;
-    r.rack.setMix (0.0f);
-    r.prepare (kSr, kBlock);
-    auto in = sine (9600, 440.0f, 0.5f);
-    auto s = in;
-    run (r, s);
-    const int lat = r.rack.latency();
-    for (size_t i = 1000; i < in.l.size(); ++i) REQUIRE (s.l[i] == Approx (in.l[i - (size_t) lat]).margin (1.0e-5));
-}
-
-TEST_CASE ("Rack: order can be changed and bad orders are refused")
-{
-    Rack r;
-    r.setOrder ({ Rack::plate, Rack::echo, Rack::heat, Rack::squeeze });
-    REQUIRE (r.getOrder()[0] == Rack::plate);
-    r.setOrder ({ Rack::plate, Rack::plate, Rack::heat, Rack::squeeze }); // duplicate — ignored
-    REQUIRE (r.getOrder()[1] == Rack::echo);
-}
-
-TEST_CASE ("Rack: blocks bigger than prepared are handled")
-{
-    RackFx r;
-    r.rack.prepare (kSr, 64);
-    auto s = sine (4096, 440.0f, 0.5f);
-    r.rack.process (s.l.data(), s.r.data(), 4096);
-    REQUIRE (allFinite (s));
+    Crossfader x;
+    x.prepare (kSr);
+    x.start();
+    float prev = x.gain();
+    float maxStep = 0.0f;
+    bool sawSwap = false;
+    for (int i = 0; i < (int) (0.03 * kSr); ++i)
+    {
+        x.next();
+        if (x.swapNow()) sawSwap = true;
+        maxStep = std::max (maxStep, std::fabs (x.gain() - prev));
+        prev = x.gain();
+    }
+    REQUIRE (sawSwap);
+    REQUIRE (maxStep < 0.01f);
+    REQUIRE (x.gain() == Catch::Approx (1.0f));
+    REQUIRE_FALSE (x.active());
 }

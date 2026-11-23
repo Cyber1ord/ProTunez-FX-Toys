@@ -1,16 +1,11 @@
 #pragma once
 
-#include "DSP/Rack.h"
+#include "DSP/Echo.h"
+#include "DSP/Heat.h"
+#include "DSP/Plate.h"
+#include "EffectIds.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
-
-/** One factory preset: parameter values (in real units) plus the effect order. */
-struct FactoryPreset
-{
-    juce::String name;
-    std::array<int, ptfx::Rack::numEffects> order;
-    std::vector<std::pair<juce::String, float>> values;
-};
 
 class ProTunezFXToysProcessor : public juce::AudioProcessor
 {
@@ -26,38 +21,43 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "ProTunez FX Toys"; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }   // Voice Morph and Filter take MIDI later
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 12.0; }
+    double getTailLengthSeconds() const override { return 60.0; }
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override { return currentPreset; }
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    /** Effect order, shared with the screen. Changing it is safe while playing. */
-    std::array<int, ptfx::Rack::numEffects> getOrder() const;
-    void setOrder (const std::array<int, ptfx::Rack::numEffects>& order);
-    void moveEffect (int effect, int direction); // -1 = left, +1 = right
+    /** The effect the menu has selected. */
+    ptfx::EffectId getActiveEffect() const;
+    /** The effect currently producing sound (lags the menu by the 20 ms crossfade). */
+    ptfx::EffectId getRunningEffect() const { return (ptfx::EffectId) running.load(); }
+    /** The running effect's meter value (0..1). */
+    float getMeter() const;
 
-    float getGainReductionDb() const { return rack.squeezeFx.gainReductionDb.load(); }
-
-    static const std::vector<FactoryPreset>& factoryPresets();
-
+    juce::UndoManager undo;
     juce::AudioProcessorValueTreeState apvts;
 
-private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    void pushParamsToRack();
-    float value (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 
-    ptfx::Rack rack;
-    std::atomic<int> orderCode { 0 }; // packed order, read on the audio thread
-    int currentPreset = 0;
+private:
+    ptfx::Effect* engine (ptfx::EffectId e);
+    void pushParams (ptfx::EffectId e);
+    void runEffect (ptfx::EffectId e, float* l, float* r, int n);
+
+    ptfx::Heat heat;
+    ptfx::Echo echo;
+    ptfx::Plate plate;
+    ptfx::Crossfader fader;
+    std::atomic<int> running { 0 };
+    int pending = 0;
+    double sr = 44100.0;
     juce::AudioBuffer<float> monoScratch;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProTunezFXToysProcessor)

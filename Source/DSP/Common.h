@@ -174,7 +174,38 @@ private:
     int mask = 0, writePos = 0;
 };
 
-/** Every effect in the rack processes a stereo block in place. */
+/** Click-free effect switching: fades down over 10 ms, signals the swap, fades back up. */
+class Crossfader
+{
+public:
+    void prepare (double sampleRate) { step = (float) (1.0 / (0.010 * sampleRate)); }
+    void start() { phase = fadingOut; swapFlag = false; }
+    /** Advance one sample. */
+    void next()
+    {
+        swapFlag = false;
+        if (phase == fadingOut)
+        {
+            g -= step;
+            if (g <= 0.0f) { g = 0.0f; phase = fadingIn; swapFlag = true; }
+        }
+        else if (phase == fadingIn)
+        {
+            g += step;
+            if (g >= 1.0f) { g = 1.0f; phase = idle; }
+        }
+    }
+    float gain() const { return g; }
+    bool swapNow() const { return swapFlag; }
+    bool active() const { return phase != idle; }
+
+private:
+    enum Phase { idle, fadingOut, fadingIn } phase = idle;
+    float g = 1.0f, step = 0.002f;
+    bool swapFlag = false;
+};
+
+/** Every effect processes a stereo block in place. */
 class Effect
 {
 public:
@@ -185,5 +216,7 @@ public:
     /** Samples of delay this effect adds (so the rack can line up the dry signal). */
     virtual int latency() const { return 0; }
     virtual void setTempo (double /*bpm*/) {}
+    /** A 0..1 value for the effect's meter (attitude, gain reduction...). */
+    virtual float meter() const { return 0.0f; }
 };
 } // namespace ptfx
