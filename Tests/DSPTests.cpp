@@ -442,41 +442,162 @@ TEST_CASE ("Echo: long times at 192 kHz stay in range")
     for (float v : l) REQUIRE (std::isfinite (v));
 }
 
-TEST_CASE ("Plate: makes a tail that dies away and stays stable at maximum decay")
+namespace
 {
-    Plate pl;
-    Plate::Params p; p.mix = 1.0f; p.decay = 0.5f; p.preDelayMs = 0.0f;
-    pl.setParams (p); pl.prepare (kSr, kBlock);
-    Stereo s ((int) kSr * 6);
-    s.l[0] = s.r[0] = 1.0f;
-    run (pl, s);
-    REQUIRE (allFinite (s));
-    const float early = rms (s.l, 4800, 24000), late = rms (s.l, (size_t) kSr * 5, (size_t) kSr * 6);
-    REQUIRE (early > 1.0e-3f);
-    REQUIRE (late < early * 0.1f);
-
-    Plate big;
-    Plate::Params q; q.mix = 1.0f; q.decay = 1.0f; q.damping = 0.0f; q.modulation = 1.0f; q.size = 1.0f;
-    big.setParams (q); big.prepare (kSr, kBlock);
-    auto loud = sine ((int) kSr * 10, 500.0f, 0.9f);
-    run (big, loud);
-    REQUIRE (allFinite (loud));
-    REQUIRE (peak (loud.l) < 10.0f);
+Plate::Params wetPlate()
+{
+    Plate::Params p;
+    p.model = 0; p.preamp = Plate::clean; p.decaySec = 2.0f; p.preDelayMs = 0.0f; p.modDepth = 0.0f; p.lowHz = 20.0f; p.highHz = 20000.0f;
+    p.width = 1.0f; p.balance = 0.0f; p.mix = 1.0f; p.inDb = 0.0f; p.outDb = 0.0f; p.duck = 0.0f; p.freeze = false;
+    p.eq1G = 0.0f; p.eq2G = 0.0f;
+    return p;
 }
 
-TEST_CASE ("Plate: the reverb is stereo (left and right differ)")
+/** Decay time (RT60) of an impulse response, measured in the 500 Hz band from the -5 to -25 dB slope. */
+float measureRt60 (Plate::Params p, double sr = kSr)
 {
-    Plate pl;
-    Plate::Params p; p.mix = 1.0f; p.width = 1.0f;
-    pl.setParams (p); pl.prepare (kSr, kBlock);
+    Plate pl; pl.setParams (p); pl.prepare (sr, kBlock);
+    const int n = (int) (sr * std::max (4.0f, p.decaySec * 1.6f));
+    std::vector<float> l ((size_t) n, 0.0f), r ((size_t) n, 0.0f);
+    l[0] = r[0] = 1.0f;
+    for (int i = 0; i < n; i += kBlock) pl.process (l.data() + i, r.data() + i, std::min (kBlock, n - i));
+    Biquad bp; bp.set (Biquad::Type::bandPass, 500.0f, 1.4f, 0.0f, sr);
+    const int win = (int) (0.05 * sr);
+    std::vector<float> db;
+    for (int i = 0; i + win <= n; i += win)
+    {
+        double e = 0;
+        for (int k = 0; k < win; ++k) { const float v = bp.process (l[(size_t) (i + k)]); e += (double) v * v; }
+        db.push_back (10.0f * std::log10 ((float) (e / win) + 1.0e-20f));
+    }
+    const float top = *std::max_element (db.begin(), db.end());
+    int i5 = -1, i25 = -1;
+    for (int i = 0; i < (int) db.size(); ++i)
+    {
+        if (i5 < 0 && db[(size_t) i] <= top - 5.0f && i > 0) i5 = i;
+        if (i5 >= 0 && db[(size_t) i] <= top - 25.0f) { i25 = i; break; }
+    }
+    if (i5 < 0 || i25 < 0) return 1.0e9f; // never got 25 dB down: very long
+    const float seconds = (float) (i25 - i5) * 0.05f;
+    return 60.0f * seconds / 20.0f;
+}
+
+float plateThd (int preamp)
+{
+    auto p = wetPlate(); p.preamp = preamp; p.decaySec = 0.6f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    auto s = sine ((int) kSr * 3, 200.0f, 0.5f);
+    run (pl, s);
+    const float f1 = toneLevel (s.l, 200.0f, (size_t) kSr * 2);
+    double sum = 0;
+    for (int k = 2; k <= 6; ++k) { const float h = toneLevel (s.l, 200.0f * (float) k, (size_t) kSr * 2); sum += (double) h * h; }
+    return (float) std::sqrt (sum) / f1;
+}
+} // namespace
+
+TEST_CASE ("Plate: the Decay setting gives that decay time (within 20 %) on every plate model")
+{
+    for (int model = 0; model < Plate::numModels; ++model)
+    {
+        auto p = wetPlate(); p.model = model;
+        const float rt = measureRt60 (p);
+        INFO ("model " << model << " RT60 " << rt);
+        REQUIRE (rt == Approx (2.0f).epsilon (0.2));
+    }
+}
+
+TEST_CASE ("Plate: a 6 second decay measures about 6 seconds")
+{
+    auto p = wetPlate(); p.decaySec = 6.0f;
+    REQUIRE (measureRt60 (p) == Approx (6.0f).epsilon (0.2));
+}
+
+TEST_CASE ("Plate: infinite decay holds the sound for 10 seconds")
+{
+    auto p = wetPlate(); p.decaySec = Plate::kInfinite; p.modDepth = 0.5f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    Stereo s ((int) kSr * 12);
+    for (int i = 0; i < (int) (kSr * 0.2); ++i) s.l[(size_t) i] = s.r[(size_t) i] = 0.3f * std::sin ((float) i * 0.07f);
+    run (pl, s);
+    const float early = rms (s.l, (size_t) kSr, (size_t) kSr * 2), late = rms (s.l, (size_t) kSr * 10, (size_t) kSr * 11);
+    REQUIRE (early > 1.0e-3f);
+    REQUIRE (std::fabs (gainToDb (late / early)) < 3.0f);
+}
+
+TEST_CASE ("Plate: Clean preamp is clean, Tube preamp adds harmonics")
+{
+    REQUIRE (plateThd (Plate::clean) < 0.001f);
+    REQUIRE (plateThd (Plate::tube) > 0.005f);
+    REQUIRE (plateThd (Plate::solid) > 0.001f);
+}
+
+TEST_CASE ("Plate: nothing comes out before the pre-delay")
+{
+    auto p = wetPlate(); p.preDelayMs = 100.0f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    Stereo s (12000);
+    s.l[0] = s.r[0] = 1.0f;
+    run (pl, s);
+    REQUIRE (peak (s.l, 0, 4700) < 1.0e-4f);
+    REQUIRE (peak (s.l, 4800, 12000) > 1.0e-3f);
+}
+
+TEST_CASE ("Plate: Width 0 is mono, Width 1 is stereo")
+{
+    auto p = wetPlate(); p.width = 0.0f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
     Stereo s (48000);
     s.l[0] = s.r[0] = 1.0f;
     run (pl, s);
+    for (size_t i = 0; i < s.l.size(); ++i) REQUIRE (s.l[i] == Approx (s.r[i]).margin (1.0e-6));
+    p.width = 1.0f;
+    Plate st; st.setParams (p); st.prepare (kSr, kBlock);
+    Stereo t (48000);
+    t.l[0] = t.r[0] = 1.0f;
+    run (st, t);
     double diff = 0.0;
-    for (size_t i = 0; i < s.l.size(); ++i) diff += std::fabs (s.l[i] - s.r[i]);
+    for (size_t i = 0; i < t.l.size(); ++i) diff += std::fabs (t.l[i] - t.r[i]);
     REQUIRE (diff > 1.0);
 }
 
+TEST_CASE ("Plate: Duck turns the reverb down while you sing")
+{
+    auto level = [] (float duck)
+    {
+        auto p = wetPlate(); p.duck = duck;
+        Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+        auto s = sine ((int) kSr * 2, 400.0f, 0.5f);
+        run (pl, s);
+        return rms (s.l, (size_t) kSr, (size_t) kSr * 2);
+    };
+    REQUIRE (gainToDb (level (1.0f) / level (0.0f)) <= -10.0f);
+}
+
+TEST_CASE ("Plate: Freeze holds the reverb after the input stops")
+{
+    auto p = wetPlate(); p.decaySec = 1.0f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    auto fill = sine ((int) (kSr * 0.5), 300.0f, 0.3f);
+    run (pl, fill);
+    p.freeze = true; pl.setParams (p);
+    Stereo s ((int) kSr * 11);
+    run (pl, s);
+    const float early = rms (s.l, (size_t) kSr, (size_t) kSr * 2), late = rms (s.l, (size_t) kSr * 9, (size_t) kSr * 10);
+    REQUIRE (early > 1.0e-3f);
+    REQUIRE (std::fabs (gainToDb (late / early)) < 3.0f);
+}
+
+TEST_CASE ("Plate: infinite decay with loud input for 10 seconds at 192 kHz stays bounded")
+{
+    auto p = wetPlate(); p.decaySec = Plate::kInfinite; p.modDepth = 1.0f; p.preamp = Plate::tube; p.inDb = 12.0f;
+    Plate pl; pl.setParams (p); pl.prepare (192000.0, 512);
+    std::vector<float> l (192000 * 10), r (l.size());
+    for (size_t i = 0; i < l.size(); ++i) l[i] = r[i] = 0.5f * std::sin ((float) i * 0.013f);
+    for (size_t i = 0; i < l.size(); i += 512) pl.process (l.data() + i, r.data() + i, (int) std::min<size_t> (512, l.size() - i));
+    float pk = 0.0f;
+    for (float v : l) { REQUIRE (std::isfinite (v)); pk = std::max (pk, std::fabs (v)); }
+    REQUIRE (pk < dbToGain (12.0f));
+}
 
 TEST_CASE ("Crossfader: switching effects ramps smoothly, never jumps")
 {

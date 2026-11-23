@@ -51,17 +51,18 @@ const std::vector<FactoryPreset> echo = {
     echoPreset ("Creative", "Runaway Dub", "Space Tape", { { "echo_timemode", 2 }, { "echo_note", 3 }, { "echo_fb", 105 }, { "echo_sat", 60 }, { "echo_mix", 40 } }),
 };
 
+// plate_model: 0 Large Steel, 1 Compact Gold Foil, 2 Studio A, 3 Studio B, 4 Studio C · plate_preamp: 0 Tube, 1 Solid, 2 Clean
 const std::vector<FactoryPreset> plate = {
-    { "Church Vocal", "Bright Vocal Plate", { { "plate_decay", 55 }, { "plate_pre", 30 }, { "plate_mix", 22 }, { "plate_lowcut", 250 } } },
-    { "Church Vocal", "Sunday Hall Plate", { { "plate_decay", 75 }, { "plate_pre", 40 }, { "plate_mix", 28 }, { "plate_size", 90 } } },
-    { "Podcast Voice", "Tiny Room Plate", { { "plate_decay", 15 }, { "plate_mix", 8 }, { "plate_lowcut", 300 } } },
-    { "Podcast Voice", "Intro Sparkle", { { "plate_decay", 45 }, { "plate_mix", 20 }, { "plate_damp", 20 } } },
-    { "Choir", "Choir Cathedral", { { "plate_decay", 85 }, { "plate_size", 100 }, { "plate_pre", 50 }, { "plate_mix", 30 } } },
-    { "Choir", "Choir Blend", { { "plate_decay", 60 }, { "plate_mix", 20 }, { "plate_damp", 50 } } },
-    { "Music", "Snare Plate", { { "plate_decay", 35 }, { "plate_pre", 10 }, { "plate_mix", 100 } } },
-    { "Music", "Keys Plate", { { "plate_decay", 65 }, { "plate_mod", 50 }, { "plate_mix", 100 } } },
-    { "Creative", "Endless Shimmer", { { "plate_decay", 100 }, { "plate_mod", 90 }, { "plate_mix", 100 } } },
-    { "Creative", "Dark Abyss", { { "plate_decay", 95 }, { "plate_damp", 90 }, { "plate_size", 100 } } },
+    { "Church Vocal", "Bright Vocal Plate", { { "plate_model", 1 }, { "plate_decay", 2.2f }, { "plate_pre", 35 }, { "plate_mix", 22 }, { "plate_low", 250 }, { "plate_duck", 30 } } },
+    { "Church Vocal", "Sunday Hall Plate", { { "plate_model", 3 }, { "plate_decay", 3.8f }, { "plate_pre", 45 }, { "plate_mix", 26 }, { "plate_low", 180 } } },
+    { "Podcast Voice", "Tiny Room Plate", { { "plate_model", 1 }, { "plate_decay", 0.6f }, { "plate_mix", 8 }, { "plate_low", 300 }, { "plate_preamp", 2 } } },
+    { "Podcast Voice", "Intro Sparkle", { { "plate_model", 1 }, { "plate_decay", 1.8f }, { "plate_mix", 20 }, { "plate_eq2f", 6000 }, { "plate_eq2g", 3 } } },
+    { "Choir", "Choir Cathedral", { { "plate_model", 3 }, { "plate_decay", 6.0f }, { "plate_pre", 60 }, { "plate_mix", 30 }, { "plate_width", 140 } } },
+    { "Choir", "Choir Blend", { { "plate_model", 0 }, { "plate_decay", 2.8f }, { "plate_mix", 20 }, { "plate_low", 200 } } },
+    { "Music", "Classic Snare Plate", { { "plate_model", 0 }, { "plate_decay", 1.6f }, { "plate_pre", 10 }, { "plate_low", 150 } } },
+    { "Music", "Dark Keys Plate", { { "plate_model", 4 }, { "plate_decay", 3.0f }, { "plate_mod", 50 } } },
+    { "Creative", "Endless Plate", { { "plate_model", 3 }, { "plate_decay", 60.0f }, { "plate_mod", 70 }, { "plate_modrate", 0.4f } } },
+    { "Creative", "Ducked Shimmer", { { "plate_model", 1 }, { "plate_decay", 8.0f }, { "plate_duck", 80 }, { "plate_eq2f", 8000 }, { "plate_eq2g", 6 } } },
 };
 
 const std::vector<FactoryPreset> none;

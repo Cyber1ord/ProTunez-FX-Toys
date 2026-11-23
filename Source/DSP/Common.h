@@ -125,6 +125,16 @@ public:
         d1 = (float) (a1 / a0); d2 = (float) (a2 / a0);
     }
 
+    /** Response at a frequency, in dB (for drawing EQ curves). */
+    float magnitudeDb (float hz, double sampleRate) const
+    {
+        const double w = 2.0 * (double) kPi * hz / sampleRate;
+        const double cr = std::cos (w), ci = -std::sin (w), c2r = std::cos (2 * w), c2i = -std::sin (2 * w);
+        const double nr = c0 + c1 * cr + c2 * c2r, ni = c1 * ci + c2 * c2i;
+        const double dr = 1.0 + d1 * cr + d2 * c2r, di = d1 * ci + d2 * c2i;
+        return (float) (10.0 * std::log10 ((nr * nr + ni * ni) / (dr * dr + di * di) + 1e-20));
+    }
+
     float process (float x)
     {
         const float y = c0 * x + s1;
