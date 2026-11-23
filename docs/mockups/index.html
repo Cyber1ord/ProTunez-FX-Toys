@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0c0d10;font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;color:#e9e9ee;width:1000px;height:600px;overflow:hidden}
+.win{width:1000px;height:600px;display:flex;flex-direction:column;background:#141519}
+.top{height:54px;display:flex;align-items:center;gap:10px;padding:0 14px;background:#0f1013;border-bottom:1px solid #2a2d35;position:relative}
+.logo{font-weight:800;font-size:18px;letter-spacing:.3px;margin-right:10px}.logo b{color:#ff5a5f}
+.sel{display:flex;align-items:center;gap:10px;height:34px;padding:0 12px;border-radius:7px;background:#1f2128;border:1.5px solid var(--a);font-weight:700;font-size:14px;min-width:190px;justify-content:space-between}
+.sel .dot{width:10px;height:10px;border-radius:50%;background:var(--a)}
+.sel .lbl{font-size:10px;color:#8b8e99;font-weight:600;letter-spacing:1px}
+.btn{height:30px;min-width:30px;padding:0 9px;border-radius:6px;background:#1f2128;border:1px solid #2e313a;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b9bcc6;font-weight:600}
+.preset{height:30px;width:250px;border-radius:6px;background:#07080a;border:1px solid #2e313a;color:var(--a);font-family:Menlo,monospace;font-size:13px;display:flex;align-items:center;padding:0 10px}
+.sp{flex:1}
+.face{flex:1;margin:14px;border-radius:14px;position:relative;overflow:hidden;border:1px solid #2e313a}
+.title{position:absolute;left:24px;top:16px;font-size:30px;font-weight:900;letter-spacing:1px}
+.sub{position:absolute;left:26px;top:52px;font-size:12px;color:#c9cbd3;opacity:.8;letter-spacing:1.5px;text-transform:uppercase}
+.k{position:absolute;text-align:center;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#dcdde3}
+.k .v{font-size:11px;color:#9a9da8;font-weight:500;letter-spacing:0;text-transform:none;margin-top:2px}
+.seg{position:absolute;display:flex;gap:4px}
+.seg div{padding:6px 10px;border-radius:5px;background:#0e0f12;border:1px solid #33363f;font-size:11px;font-weight:700;color:#8b8e99;letter-spacing:.5px}
+.seg div.on{background:var(--a);color:#111;border-color:var(--a)}
+.cap{position:absolute;font-size:10px;color:#8b8e99;letter-spacing:1.5px;font-weight:700}
+.led{position:absolute;background:#050506;border:1px solid #2e313a;border-radius:6px;font-family:Menlo,monospace;color:var(--a);display:flex;align-items:center;justify-content:center;text-shadow:0 0 8px var(--a)}
+.meter{position:absolute;background:linear-gradient(#f4ecd8,#e3d6b6);border-radius:8px;border:3px solid #0a0a0a;overflow:hidden}
+.drop{position:absolute;left:186px;top:46px;width:260px;background:#1b1d23;border:1px solid #3a3d47;border-radius:9px;box-shadow:0 14px 40px rgba(0,0,0,.6);padding:6px;z-index:9}
+.drop .it{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;font-size:13px;font-weight:600}
+.drop .it.cur{background:#2a2d35}
+.drop .it i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.drop .it small{margin-left:auto;color:#8b8e99;font-weight:500;font-size:11px}
+.drop .h{font-size:10px;letter-spacing:1.5px;color:#8b8e99;padding:8px 10px 4px;font-weight:700}
+.drop .dim{color:#6b6e78}
+.note{position:absolute;right:16px;bottom:10px;font-size:11px;color:#8b8e99}
+</style></head>
+<body><div class="win" id="win"></div>
+<script>
+const P=new URLSearchParams(location.search), FX=P.get('fx')||'heat', OPEN=P.get('open')==='1';
+const C={heat:'#ff7a3d',echo:'#3dd6c8',plate:'#9b7bff',morph:'#ff5aa8',wider:'#5aa8ff',filter:'#7be05a',crystal:'#bfe9ff',space:'#3d7bff'};
+const NAMES={heat:'Heat',echo:'Echo',plate:'Plate',morph:'Voice Morph',wider:'Wider',filter:'Filter',crystal:'Crystal Echo',space:'Space'};
+const LIKE={heat:'Decapitator',echo:'EchoBoy',plate:'SuperPlate',morph:'Little AlterBoy',wider:'MicroShift',filter:'FilterFreak',crystal:'Crystallizer',space:'SpaceBlender'};
+const PRE={heat:'Warm Vocal Glow',echo:'Church Eighth Note',plate:'Bright Vocal Plate',morph:'Deep Voice -5',wider:'Wide Lead Vocal',filter:'Quarter Note Sweep',crystal:'Shimmer Reverse',space:'Ambient Swell'};
+document.documentElement.style.setProperty('--a',C[FX]);
+
+function knob(x,y,size,label,val,pos,col){ // pos 0..1
+  const r=size/2, a0=-135, a=a0+270*pos, rad=d=>(d-90)*Math.PI/180;
+  const arc=(from,to,rr)=>{const s=rad(from),e=rad(to);const L=(to-from)>180?1:0;
+    return `M${r+rr*Math.cos(s)} ${r+rr*Math.sin(s)} A${rr} ${rr} 0 ${L} 1 ${r+rr*Math.cos(e)} ${r+rr*Math.sin(e)}`};
+  const px=r+(r-14)*Math.cos(rad(a)), py=r+(r-14)*Math.sin(rad(a));
+  return `<div class="k" style="left:${x-r}px;top:${y-r}px;width:${size}px">
+  <svg width="${size}" height="${size}"><path d="${arc(a0,135,r-3)}" stroke="#2e313a" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="${arc(a0,Math.max(a0+1,a),r-3)}" stroke="${col||C[FX]}" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <circle cx="${r}" cy="${r}" r="${r-10}" fill="url(#g)" stroke="#0a0a0c" stroke-width="2"/>
+  <line x1="${r}" y1="${r}" x2="${px}" y2="${py}" stroke="#f2f2f5" stroke-width="${size>100?4:3}" stroke-linecap="round"/>
+  <defs><radialGradient id="g" cx="40%" cy="35%"><stop offset="0" stop-color="#4a4d57"/><stop offset="1" stop-color="#202228"/></radialGradient></defs></svg>
+  <div>${label}</div><div class="v">${val}</div></div>`;}
+const seg=(x,y,items,on)=>`<div class="seg" style="left:${x}px;top:${y}px">${items.map((t,i)=>`<div class="${i===on?'on':''}">${t}</div>`).join('')}</div>`;
+const cap=(x,y,t)=>`<div class="cap" style="left:${x}px;top:${y}px">${t}</div>`;
+const led=(x,y,w,h,t,fs)=>`<div class="led" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;font-size:${fs}px">${t}</div>`;
+function vu(x,y,w,h,needle,label){
+  const ticks=[...Array(11)].map((_,i)=>{const a=(-50+i*10)*Math.PI/180;const cx=w/2,cy=h*1.05,R=h*0.8;
+   return `<line x1="${cx+R*Math.sin(a)}" y1="${cy-R*Math.cos(a)}" x2="${cx+(R-9)*Math.sin(a)}" y2="${cy-(R-9)*Math.cos(a)}" stroke="${i>7?'#c0392b':'#222'}" stroke-width="2"/>`}).join('');
+  const na=needle*Math.PI/180;
+  return `<div class="meter" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"><svg width="${w}" height="${h}">${ticks}
+  <line x1="${w/2}" y1="${h*1.05}" x2="${w/2+h*0.85*Math.sin(na)}" y2="${h*1.05-h*0.85*Math.cos(na)}" stroke="#111" stroke-width="2"/>
+  <text x="${w/2}" y="${h*0.62}" text-anchor="middle" font-size="12" font-weight="700" fill="#333">${label}</text></svg></div>`;}
+
+const hdr=(sub)=>`<div class="title" style="color:${C[FX]}">${NAMES[FX].toUpperCase()}</div><div class="sub">${sub} &nbsp;·&nbsp; <span style="color:${C[FX]}">like ${LIKE[FX]}</span></div>`;
+const box=(x,y,w,h,label)=>`<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(0,0,0,.2)"></div>${label?cap(x+12,y+8,label):''}`;
+const btn=(x,y,t,on,w)=>`<div class="seg" style="left:${x}px;top:${y}px"><div class="${on?'on':''}" style="${w?`width:${w}px;text-align:center`:''}">${t}</div></div>`;
+const meters=(x,y,h)=>`${cap(x-2,y-16,'IN')}${cap(x+26,y-16,'OUT')}${[0,28].map((o,i)=>`<div style="position:absolute;left:${x+o}px;top:${y}px;width:8px;height:${h}px;border-radius:4px;background:#0a0a0a;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:${i?58:66}%;background:linear-gradient(#ff4d4d,#ffcf3d 12%,#5ad67a 40%)"></div></div>`).join('')}`;
+const tweak=(y,items)=>`<div style="position:absolute;left:14px;right:14px;top:${y}px;height:${532-y}px;border-top:1px dashed rgba(255,255,255,.18);background:rgba(0,0,0,.25)"></div>${cap(26,y+8,'TWEAK  ·  hidden controls')}<div style="position:absolute;left:26px;right:26px;top:${y+28}px;display:flex;flex-wrap:wrap;gap:6px">${items.map(t=>`<div style="padding:4px 8px;border-radius:4px;background:#0e0f12;border:1px solid #33363f;font-size:10.5px;color:#aeb1bb">${t}</div>`).join('')}</div>`;
+const list=(x,y,items,on,w)=>`<div style="position:absolute;left:${x}px;top:${y}px;display:flex;flex-direction:column;gap:4px">${items.map((t,i)=>`<div style="padding:4px 9px;border-radius:5px;font-size:11px;font-weight:700;width:${w||140}px;${i===on?`background:${C[FX]};color:#111`:'background:#0e0f12;color:#8b8e99;border:1px solid #33363f'}">${t}</div>`).join('')}</div>`;
+function wave(w,h,hot){let p='';for(let i=0;i<w;i+=3){const env=Math.exp(-Math.pow((i-w*0.32)/(w*0.28),2))*0.9+0.12+(Math.abs(i-w*0.72)<20?0.6:0);
+ const a=(Math.sin(i*1.7)*0.5+0.5)*env*h*0.45; const c=Math.abs(i-w*0.72)<22?hot:C[FX]; p+=`<line x1="${i}" y1="${h/2-a}" x2="${i}" y2="${h/2+a}" stroke="${c}" stroke-width="2" opacity=".9"/>`;}return p;}
+
+const faces={
+heat:()=>`<div class="face" style="background:radial-gradient(circle at 30% 20%,#3a1d14,#1b1110 60%,#120c0b)">${hdr('Analog saturation')}
+ ${btn(40,96,'PUNISH +20 dB',false)}
+ ${vu(360,24,250,120,4,'ATTITUDE')}
+ ${knob(130,250,130,'Drive','4.5 / 10',.45)}
+ ${knob(820,210,86,'Output','-2.5 dB',.45)}${btn(880,150,'AUTO',true)}
+ ${knob(340,250,72,'Low Cut','80 Hz',.25)}${btn(310,300,'THUMP',false)}
+ ${knob(470,250,72,'Tone','0',.5)}
+ ${knob(600,250,72,'High Cut','OFF',1)}${btn(574,300,'STEEP',true)}
+ ${knob(820,320,72,'Mix','100 %',1)}
+ ${cap(330,350,'STYLE')}${seg(330,368,['A','E','N','T','P'],3)}
+ <div class="cap" style="left:530px;top:374px;letter-spacing:0;font-weight:500">tape · console · preamp · triode · pentode characters</div>
+ ${tweak(430,['Fine adjust (Shift-drag)','Double-click to reset','Right-click for exact value','High Cut slope 6 or 30 dB/oct'])}
+</div>`,
+
+echo:()=>`<div class="face" style="background:linear-gradient(160deg,#10292a,#0e1718 60%,#0b1112)">${hdr('Echo machine')}
+ ${knob(70,150,64,'Mix','25 %',.25)}${knob(180,150,74,'Echo Time','1/8',.45)}${knob(290,150,64,'Feedback','35 %',.35)}
+ ${seg(40,226,['TIME','NOTE','DOT','TRIP','PATTERN'],1)}
+ ${knob(70,300,66,'Low Cut','120 Hz',.3)}${knob(290,300,66,'High Cut','6 kHz',.6)}
+ <div style="position:absolute;left:118px;top:272px;width:120px;height:60px;border-radius:6px;background:#06110f;border:1px solid #1f4a45;overflow:hidden"><svg width="120" height="66">${[0,1,2,3,4,5,6,7].map(i=>`<rect x="${6+i*14}" y="${10+i*6}" width="8" height="${50-i*6}" fill="${C[FX]}" opacity="${1-i*.1}"/>`).join('')}</svg></div>
+ ${btn(118,338,'PRIME #',false,120)}
+ ${box(380,86,300,266,'MODE &amp; GROOVE')}
+ ${btn(400,112,'TAP',false)}${led(456,110,110,28,'96.0 bpm',13)}${btn(580,112,'HOST',true)}
+ ${knob(450,172,48,'Groove','shuffle/swing',.5)}${knob(600,172,48,'Feel','drag/rush',.5)}
+ ${list(400,240,['SINGLE','DUAL','PING-PONG','RHYTHM'],2,120)}
+ ${knob(610,290,48,'Repeats','8',.5)}
+ ${box(700,86,250,250,'')}
+ ${meters(730,116,64)}
+ ${knob(860,130,56,'Input','0 dB',.5)}${knob(860,232,56,'Output','0 dB',.5)}
+ ${knob(758,226,46,'Saturation','20 %',.2)}
+ ${cap(716,290,'STYLE')}${led(716,306,140,24,'STUDIO TAPE ▾',11)}${btn(864,306,'EDIT',false)}
+ ${tweak(392,['Accent','Width','L/R Offset 0–25 ms','Dual: Accent 1/2 · Feedback Mix · Balance · Feedback Balance','Rhythm: Length 1–8 beats · Grid 1/2–1/64 · Warp · Pan shape','Rhythm editor: 16 taps · Shape (Decay, Reverse, Swell, Fade, Nonlin)','Style Edit: 3-band EQ with per-repeat Decay · Mid Res','Saturation type (9)','Diffusion: Amount · Size · Loop/Post','Wobble: Depth · Rate · Shape · Sync','~30 echo styles'])}
+</div>`,
+
+plate:()=>`<div class="face" style="background:linear-gradient(160deg,#1d1730,#141220 60%,#0f0d17)">${hdr('Plate reverb')}
+ ${cap(40,96,'PLATE')}${list(40,114,['Large Steel','Compact Gold Foil','Studio Plate A','Studio Plate B','Studio Plate C'],0,150)}
+ ${cap(40,266,'PREAMP')}${seg(40,284,['TUBE','SOLID','CLEAN'],0)}
+ <div style="position:absolute;left:250px;top:84px;width:250px;height:250px;border-radius:50%;background:#0a0910;border:2px solid #3a3456"></div>
+ ${knob(375,209,180,'','',.6)}${led(330,282,90,24,'2.4 s',13)}<div class="cap" style="left:350px;top:96px">DECAY  0.5 s – ∞</div>
+ ${btn(342,316,'TWEAK',true)}
+ ${knob(580,150,84,'Pre-Delay','35 ms',.15)}${knob(700,150,70,'Modulation','30 %',.3)}
+ ${cap(560,220,'FILTER')}${knob(580,270,62,'Low','250 Hz',.4)}${knob(700,270,62,'High','12 kHz',.75)}
+ ${meters(800,120,110)}${knob(910,140,52,'Input','0 dB',.5)}${knob(910,240,52,'Output','0 dB',.5)}
+ ${knob(850,320,62,'Mix','22 %',.22)}
+ ${tweak(380,['Modulation Rate (Hz)','Stereo Width','L/R Balance','Low Cut slope','2-band parametric EQ on a draggable graph (Alt-scroll = Q)','Auto-Decay / ducking: Threshold · Attack · Release'])}
+</div>`,
+
+morph:()=>`<div class="face" style="background:linear-gradient(160deg,#2c0f22,#1a0b16 60%,#110810)">${hdr('Monophonic voice manipulation')}
+ <div style="position:absolute;left:40px;top:96px;width:440px;height:270px;border-radius:14px;background:linear-gradient(160deg,#ff5aa8,#c23b7e);box-shadow:inset 0 2px 0 rgba(255,255,255,.3)"></div>
+ <div class="cap" style="left:100px;top:110px;color:#3a0020">PITCH ±12</div><div class="cap" style="left:330px;top:110px;color:#3a0020">FORMANT</div>
+ ${knob(140,210,130,'','',.5,'#3a0020')}${knob(380,210,130,'','',.42,'#3a0020')}
+ ${btn(236,196,'LINK',false,48)}
+ ${led(90,300,100,34,'-5.0',20)}${led(330,300,100,34,'-2.0',20)}
+ ${box(510,96,150,270,'MODE')}${list(526,124,['TRANSPOSE','QUANTIZE','ROBOT'],1,118)}
+ <div style="position:absolute;left:526px;top:226px;font-size:10.5px;color:#c98aa9;line-height:15px;width:120px">Robot: locks to one note (0 = C above middle C)<br><br>MIDI: play the pitch from a keyboard</div>
+ ${box(690,96,255,270,'')}
+ ${knob(760,200,96,'Drive','tube',.2)}${knob(880,200,96,'Mix','100 %',1)}
+ ${btn(740,300,'MIDI CONTROL',true)}
+ ${tweak(410,['MIDI note → pitch (Transpose / Quantize = intervals, Robot = vocoder-style)','Fine adjust','Value readout'])}
+</div>`,
+
+wider:()=>`<div class="face" style="background:linear-gradient(160deg,#101d2e,#0d141e 60%,#0a0f16)">${hdr('Stereo widener')}
+ <div style="position:absolute;left:60px;top:110px;width:860px;height:240px;border-radius:16px;background:#0c1520;border:1px solid #23344a"></div>
+ ${knob(150,220,96,'Mix','100 %',1)}
+ ${knob(300,220,96,'Focus','20 Hz – 10 kHz',.3)}
+ ${cap(430,150,'STYLE')}<div style="position:absolute;left:430px;top:170px;display:flex;gap:10px">${['I','II','III'].map((t,i)=>`<div style="width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;${i==0?`background:${C[FX]};color:#111`:'background:#0e0f12;color:#8b8e99;border:1px solid #33363f'}">${t}</div>`).join('')}</div>
+ <div class="cap" style="left:430px;top:232px;letter-spacing:0;font-weight:500;width:170px;line-height:15px">I smooth · II chorused · III widest, hardest</div>
+ ${knob(690,220,96,'Detune','50–200 %',.33)}${knob(840,220,96,'Delay','tight ↔ loose',.33)}
+ ${tweak(400,['No hidden panel in the original','Fine adjust','Value readout'])}
+</div>`,
+
+filter:()=>`<div class="face" style="background:linear-gradient(160deg,#142a12,#0f190e 60%,#0b120a)">${hdr('Creative resonant filtering')}
+ ${seg(560,22,['SINGLE','DUAL'],1)}${seg(700,22,['PARALLEL','SERIAL'],0)}${btn(860,22,'LINK',false)}
+ ${[0,1].map(f=>`${box(24+f*250,86,236,276,'FILTER '+(f+1))}
+   ${knob(80+f*250,150,62,'Freq','1.2 kHz',.55)}${knob(200+f*250,150,62,'Res','60 %',.6)}
+   ${knob(80+f*250,240,52,'Gain','0 dB',.5)}${knob(200+f*250,240,52,'Mod','40 %',.4)}
+   ${seg(36+f*250,300,['LP','BP','HP','BR'],f)}${seg(36+f*250,332,['2','4','6','8'],1)}`).join('')}
+ ${box(524,86,150,276,'')}
+ <div style="position:absolute;left:536px;top:100px;width:126px;height:80px;border-radius:8px;background:#07140a;border:1px solid #2d5a2a;overflow:hidden"><svg width="126" height="80"><path d="M0 74 L24 74 C50 74, 56 12, 80 8 L126 8 L126 80 L0 80Z" fill="${C[FX]}" opacity=".85"/></svg></div>
+ ${knob(570,232,52,'Mix','100 %',1)}${knob(636,232,52,'Mod','40 %',.4)}
+ ${knob(570,322,40,'Input','0 dB',.5)}${knob(636,322,40,'Output','0 dB',.5)}
+ ${box(690,86,260,276,'MODULATION')}
+ ${led(706,112,228,26,'RHYTHM ▾  (LFO · Rhythm · Env · Random · Step · ADSR)',9)}
+ ${btn(706,150,'TAP TEMPO',false)}${led(800,148,134,26,'120 bpm  · HOST',11)}
+ ${cap(706,186,'RHYTHM')}${led(706,202,228,24,'1/4 note',12)}
+ ${cap(706,236,'SHAPE')}${led(706,252,228,24,'Sine',12)}
+ ${knob(780,320,52,'Groove','0',.5)}${knob(880,320,52,'Rate','',.4)}
+ ${tweak(400,['Shape Editor (draw LFO)','Smoothing + mode (Lin, Sin, Exp, Sym, Rev)','Freq Mod ±10 oct','Res Mod','Level Mod','L/R Offset','L/R Mode Normal/Flipped','Analog Style: Clean · Fat · Squash · Dirt · Crunch · Shred · Pump','Rhythm Editor: bars · beats/bar · grid · presets','Envelope: Threshold · Gain · Attack · Release','ADSR / Step triggers: button · MIDI · audio'])}
+</div>`,
+
+crystal:()=>`<div class="face" style="background:linear-gradient(160deg,#16222a,#0f171c 60%,#0b1115)">${hdr('Granular echo synthesizer')}
+ ${knob(90,160,74,'Mix','40 %',.4)}${knob(230,160,84,'Pitch','+1200 c',.75)}${knob(380,160,84,'Splice','170 ms',.4)}${knob(530,160,84,'Delay','1/4',.45)}${knob(680,160,84,'Recycle','45 %',.45)}
+ ${led(190,222,84,24,'+1200 c',12)}${led(340,222,84,24,'170 ms',12)}${led(490,222,84,24,'1/4 note',12)}
+ ${box(30,270,740,100,'')}
+ ${knob(110,320,56,'Threshold','-30 dB',.4)}
+ ${cap(220,286,'DIRECTION')}${seg(220,304,['REVERSE','FORWARD'],0)}
+ ${cap(420,286,'SYNC')}${seg(420,304,['FREE','MIDI SYNC'],1)}
+ ${knob(680,320,56,'Gate ↔ Duck','0',.5)}
+ ${meters(810,120,110)}${knob(900,140,52,'Input','0 dB',.5)}${knob(900,240,52,'Output','0 dB',.5)}${btn(820,320,'TWEAK',true,110)}
+ ${tweak(400,['FB Mode','Pitch Offset (L/R)','Splice Offset (L/R)','Delay Offset (L/R)','Gate/Duck Attack','Gate/Duck Release','Low Cut','High Cut'])}
+</div>`,
+
+space:()=>`<div class="face" style="background:radial-gradient(circle at 50% 30%,#101a35,#0b0f1c 60%,#07090f)">${hdr('Imaginary space machine')}
+ <div style="position:absolute;left:30px;top:90px;width:915px;height:220px;border-radius:12px;background:#05060b;border:1px solid #23305a;overflow:hidden">
+  <svg width="915" height="220">${wave(915,220,'#e040fb')}<circle cx="290" cy="76" r="9" fill="#e040fb"/></svg>
+  <div style="position:absolute;left:16px;bottom:10px;font-size:13px;color:#7fb2ff">Time: 327 ms &nbsp;·&nbsp; drag the dot to reshape the space</div></div>
+ ${btn(60,346,'WARP',false,60)}${btn(60,384,'SYNC',true,60)}
+ ${knob(220,380,90,'Time','100 ms – 60 s',.3)}${knob(370,380,90,'Color','60 %',.6)}${knob(520,380,90,'Texture','grains ↔ lush',.3)}${knob(670,380,90,'Mod','50 %',.5)}${knob(820,380,90,'Mix','50 %',.5)}
+ ${btn(60,422,'FREEZE',false,60)}
+ ${tweak(470,['Sync: 1–32 beats','Right-click: % readout','Shift: fine adjust'])}
+</div>`};
+
+document.getElementById('win').innerHTML=`<div class="top">
+ <div class="logo">ProTunez <b>FX Toys</b></div>
+ <div class="sel"><span class="dot"></span><span><span class="lbl">EFFECT&nbsp;&nbsp;</span>${NAMES[FX]}</span><span>▾</span></div>
+ <div class="sp"></div>
+ <div class="btn">◀</div><div class="preset">${PRE[FX]}</div><div class="btn">▶</div><div class="btn">Save</div>
+ <div class="sp"></div><div class="btn">⚙</div><div class="btn" style="color:#ff5a5f">BYPASS</div>
+ ${OPEN?`<div class="drop" style="width:330px"><div class="h">CHOOSE AN EFFECT</div>
+   ${Object.keys(C).map(k=>`<div class="it ${k===FX?'cur':''}"><i style="background:${C[k]}"></i>${NAMES[k]}<small>like ${LIKE[k]}</small></div>`).join('')}
+ </div>`:''}
+</div>${faces[FX]()}`;
+</script></body></html>
