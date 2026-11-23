@@ -148,7 +148,8 @@ private:
     float c0 = 1, c1 = 0, c2 = 0, d1 = 0, d2 = 0, s1 = 0, s2 = 0;
 };
 
-/** Circular delay buffer with whole-sample and smooth (fractional) reads. */
+/** Circular delay buffer with whole-sample and smooth (fractional) reads.
+    reset() is instant: it just forgets what was written, so switching effects never stalls the audio thread. */
 class DelayLine
 {
 public:
@@ -159,12 +160,22 @@ public:
         buffer.assign ((size_t) size, 0.0f);
         mask = size - 1;
         writePos = 0;
+        filled = 0;
     }
-    void reset() { std::fill (buffer.begin(), buffer.end(), 0.0f); writePos = 0; }
-    void push (float x) { buffer[(size_t) writePos] = x; writePos = (writePos + 1) & mask; }
+    void reset() { filled = 0; }
+    void push (float x)
+    {
+        buffer[(size_t) writePos] = x;
+        writePos = (writePos + 1) & mask;
+        if (filled <= mask) ++filled;
+    }
 
-    /** Sample written `delay` samples ago (delay >= 1 means before the latest push). */
-    float read (int delay) const { return buffer[(size_t) ((writePos - delay) & mask)]; }
+    /** Sample written `delay` samples ago (delay >= 1 means before the latest push). Silence before the last reset. */
+    float read (int delay) const
+    {
+        if (delay > filled || delay < 1) return 0.0f;
+        return buffer[(size_t) ((writePos - delay) & mask)];
+    }
 
     /** Smooth read between samples (4-point Hermite interpolation). */
     float readFrac (float delay) const
@@ -182,7 +193,7 @@ public:
 
 private:
     std::vector<float> buffer { 0.0f };
-    int mask = 0, writePos = 0;
+    int mask = 0, writePos = 0, filled = 0;
 };
 
 /** Click-free effect switching: fades down over 10 ms, signals the swap, fades back up. */

@@ -1,7 +1,13 @@
 #include "Widgets.h"
+#include "../UndoHistory.h"
 
 namespace ptfx::ui
 {
+void gestureStart (const APVTS& state)
+{
+    if (auto* h = dynamic_cast<HasUndo*> (&state.processor)) h->checkpoint();
+}
+
 juce::String formatValue (float v, const juce::String& unit)
 {
     const float a = std::abs (v);
@@ -33,6 +39,7 @@ void groupBox (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& la
 void Knob::FineSlider::mouseDown (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(); return; }
+    if (onGestureStart) onGestureStart();
     setMouseDragSensitivity (e.mods.isShiftDown() ? 1200 : 250);
     juce::Slider::mouseDown (e);
 }
@@ -47,13 +54,18 @@ Knob::Knob (APVTS& s, const juce::String& id, const juce::String& label, juce::C
     slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
     slider.setDoubleClickReturnValue (true, param->convertFrom0to1 (param->getDefaultValue()));
     slider.onValueChange = [this] { repaint(); };
+    slider.onGestureStart = [&s] { gestureStart (s); };
     slider.onRightClick = [this]
     {
         juce::PopupMenu m;
         m.addSectionHeader (name);
         m.addItem (1, "Exact value: " + juce::String (slider.getValue(), 3) + " " + unit, false);
         m.addItem (2, "Reset to default");
-        m.showMenuAsync (juce::PopupMenu::Options(), [this] (int r) { if (r == 2) slider.setValue (slider.getDoubleClickReturnValue()); });
+        juce::Component::SafePointer<Knob> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
+        {
+            if (safe != nullptr && r == 2) safe->slider.setValue (safe->slider.getDoubleClickReturnValue());
+        });
     };
     addAndMakeVisible (slider);
     attachment = std::make_unique<APVTS::SliderAttachment> (s, id, slider);
@@ -87,7 +99,7 @@ void Knob::paint (juce::Graphics& g)
 
 // ---------------------------------------------------------------- Segments
 
-Segments::Segments (APVTS& s, const juce::String& id, juce::StringArray labels, juce::Colour colour, bool vert) : vertical (vert)
+Segments::Segments (APVTS& s, const juce::String& id, juce::StringArray labels, juce::Colour colour, bool vert) : state (s), vertical (vert)
 {
     param = s.getParameter (id);
     jassert (param != nullptr);
@@ -97,6 +109,7 @@ Segments::Segments (APVTS& s, const juce::String& id, juce::StringArray labels, 
         b->setColour (juce::TextButton::buttonOnColourId, colour);
         b->onClick = [this, i]
         {
+            gestureStart (state);
             if (attachment) attachment->setValueAsCompleteGesture ((float) i);
             if (onChange) onChange (i);
         };
@@ -135,7 +148,7 @@ void Segments::resized()
 
 // ---------------------------------------------------------------- Toggle / Choice
 
-Toggle::Toggle (APVTS& s, const juce::String& id, const juce::String& label, juce::Colour colour) : juce::TextButton (label)
+Toggle::Toggle (APVTS& s, const juce::String& id, const juce::String& label, juce::Colour colour) : juce::TextButton (label), state (s)
 {
     setClickingTogglesState (true);
     setColour (juce::TextButton::buttonOnColourId, colour);
@@ -147,7 +160,7 @@ void Toggle::place (int x, int y, int w, int h)
     setBounds (x, y, w > 0 ? w : (int) textWidth (font (11.0f, true), getButtonText()) + 24, h);
 }
 
-Choice::Choice (APVTS& s, const juce::String& id, juce::Colour colour)
+Choice::Choice (APVTS& s, const juce::String& id, juce::Colour colour) : state (s)
 {
     if (auto* c = dynamic_cast<juce::AudioParameterChoice*> (s.getParameter (id))) addItemList (c->choices, 1);
     setColour (juce::ComboBox::textColourId, colour);

@@ -112,3 +112,98 @@ TEST_CASE ("Presets: next wraps from the last preset to the first")
     f.pm.previous();
     REQUIRE (f.pm.currentName() == juce::String (all.back().name));
 }
+
+// ---------------------------------------------------------------- whole-processor checks (review fixes)
+#include "../Source/PluginProcessor.h"
+
+namespace
+{
+struct Proc
+{
+    juce::ScopedJuceInitialiser_GUI gui;
+    ProTunezFXToysProcessor p;
+    Proc() { p.setPlayConfigDetails (2, 2, 48000.0, 512); p.prepareToPlay (48000.0, 512); }
+    void set (const char* id, float v) { auto* q = p.apvts.getParameter (id); q->setValueNotifyingHost (q->convertTo0to1 (v)); }
+    float get (const char* id) { auto* q = p.apvts.getParameter (id); return q->convertFrom0to1 (q->getValue()); }
+    juce::AudioBuffer<float> run (juce::AudioBuffer<float> buf)
+    {
+        juce::MidiBuffer midi;
+        for (int i = 0; i < buf.getNumSamples(); i += 512)
+        {
+            const int n = std::min (512, buf.getNumSamples() - i);
+            juce::AudioBuffer<float> sub (buf.getArrayOfWritePointers(), 2, i, n);
+            p.processBlock (sub, midi);
+        }
+        return buf;
+    }
+    juce::AudioBuffer<float> silence (int n) { juce::AudioBuffer<float> b (2, n); b.clear(); return run (b); }
+};
+
+int impulseArrival (Proc& pr)
+{
+    juce::AudioBuffer<float> b (2, 4096);
+    b.clear();
+    b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
+    auto out = pr.run (b);
+    int best = -1; float bv = 0.0f;
+    for (int i = 0; i < out.getNumSamples(); ++i) if (std::fabs (out.getSample (0, i)) > bv) { bv = std::fabs (out.getSample (0, i)); best = i; }
+    return best;
+}
+} // namespace
+
+TEST_CASE ("Review fix: reported latency never changes and every effect lines up with it")
+{
+    Proc pr;
+    pr.set ("heat_mix", 0.0f); pr.set ("echo_mix", 0.0f); pr.set ("plate_mix", 0.0f);
+    const int lat = pr.p.getLatencySamples();
+    REQUIRE (lat == ptfx::Oversampler2x::latency());
+    for (int e : { 0, 1, 2, 3 })
+    {
+        pr.set ("effect", (float) e);
+        pr.silence (48000);
+        REQUIRE (pr.p.getLatencySamples() == lat);
+        REQUIRE (impulseArrival (pr) == lat);
+    }
+}
+
+TEST_CASE ("Review fix: Bypass fades to the dry sound, in time with the reported latency")
+{
+    Proc pr;
+    pr.set ("effect", 1.0f);
+    pr.set ("echo_mix", 100.0f);
+    pr.set ("bypass", 1.0f);
+    pr.silence (48000);
+    REQUIRE (impulseArrival (pr) == pr.p.getLatencySamples());
+}
+
+TEST_CASE ("Review fix: each Undo steps back one change at a time")
+{
+    Proc pr;
+    const float start = pr.get ("heat_mix");
+    pr.p.checkpoint(); pr.set ("heat_mix", 20.0f);
+    pr.p.checkpoint(); pr.set ("heat_mix", 80.0f);
+    REQUIRE (pr.p.undoLast());
+    REQUIRE (pr.get ("heat_mix") == Approx (20.0f).margin (0.01));
+    REQUIRE (pr.p.undoLast());
+    REQUIRE (pr.get ("heat_mix") == Approx (start).margin (0.01));
+}
+
+TEST_CASE ("Review fix: Echo presets and A/B keep the rhythm pattern")
+{
+    Proc pr;
+    pr.set ("effect", 1.0f);
+    ptfx::RhythmPattern pat; pat.count = 3;
+    for (int i = 0; i < 3; ++i) pat.taps[(size_t) i] = { 0.5f * (float) (i + 1), 0.8f };
+    pr.p.setEchoPattern (pat);
+    juce::TemporaryFile dir;
+    ptfx::PresetManager pm (pr.p.apvts, [] { return EffectId::echo; }, dir.getFile(),
+                            [&pr] (EffectId) { return pr.p.apvts.state.getProperty ("echoPattern").toString(); },
+                            [&pr] (EffectId, const juce::String& s) { pr.p.setEchoPatternString (s); });
+    REQUIRE (pm.saveUser (EffectId::echo, "Taps"));
+    pr.p.setEchoPattern ({});
+    pm.load (EffectId::echo, "User", "Taps");
+    REQUIRE (pr.p.getEchoPattern().count == 3);
+    const auto& f = factoryPresets (EffectId::echo).front();
+    pm.load (EffectId::echo, f.category, f.name);
+    REQUIRE (pr.p.getEchoPattern().count == 0); // factory presets use Repeats + Grid
+}

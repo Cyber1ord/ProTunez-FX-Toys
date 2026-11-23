@@ -153,11 +153,12 @@ public:
     {
         auto chooser = std::make_shared<juce::FileChooser> ("Save rhythm pattern", folder().getChildFile ("My Pattern.ptpat"), "*.ptpat");
         folder().createDirectory();
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles, [this, chooser] (const juce::FileChooser& fc)
+        juce::Component::SafePointer<RhythmEditor> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles, [safe, chooser] (const juce::FileChooser& fc)
         {
             auto f = fc.getResult();
-            if (f == juce::File()) return;
-            const auto p = shown();
+            if (safe == nullptr || f == juce::File()) return;
+            const auto p = safe->shown();
             juce::StringArray lines;
             for (int i = 0; i < p.count; ++i) lines.add (juce::String (p.taps[(size_t) i].pos, 4) + " " + juce::String (p.taps[(size_t) i].level, 3));
             f.withFileExtension ("ptpat").replaceWithText (lines.joinIntoString ("\n"));
@@ -167,18 +168,19 @@ public:
     void load()
     {
         auto chooser = std::make_shared<juce::FileChooser> ("Load rhythm pattern", folder(), "*.ptpat");
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this, chooser] (const juce::FileChooser& fc)
+        juce::Component::SafePointer<RhythmEditor> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, chooser] (const juce::FileChooser& fc)
         {
             auto f = fc.getResult();
-            if (! f.existsAsFile()) return;
+            if (safe == nullptr || ! f.existsAsFile()) return;
             RhythmPattern p;
             for (auto& line : juce::StringArray::fromLines (f.loadFileAsString()))
             {
                 const auto bits = juce::StringArray::fromTokens (line, " ", "");
                 if (bits.size() == 2 && p.count < 16) p.taps[(size_t) p.count++] = { bits[0].getFloatValue(), juce::jlimit (0.0f, 1.0f, bits[1].getFloatValue()) };
             }
-            pattern = p;
-            commit();
+            safe->pattern = p;
+            safe->commit();
         });
     }
 
@@ -253,7 +255,7 @@ public:
         for (int i = 0; i < Echo::numStyles(); ++i) styleBox.addItem (Echo::styles()[(size_t) i].name, i + 1);
         styleBox.setColour (juce::ComboBox::textColourId, accent (EffectId::echo));
         styleBox.setColour (juce::ComboBox::backgroundColourId, col::led);
-        styleBox.onChange = [this] { params::applyEchoStyle (state, styleBox.getSelectedId() - 1); };
+        styleBox.onChange = [this] { proc.checkpoint(); params::applyEchoStyle (state, styleBox.getSelectedId() - 1); };
         addAndMakeVisible (styleBox);
         styleBox.setBounds (716, 306, 150, 26);
         editBtn.onClick = [this] { showTab (1); setTweakOpen (true); tweakBtn->setToggleState (true, juce::dontSendNotification); };
@@ -436,6 +438,7 @@ private:
 
     void tapTempo()
     {
+        proc.checkpoint();
         const double now = juce::Time::getMillisecondCounterHiRes();
         if (! taps.empty() && now - taps.back() > 2000.0) taps.clear();
         taps.push_back (now);

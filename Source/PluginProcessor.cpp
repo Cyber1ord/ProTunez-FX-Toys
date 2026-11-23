@@ -10,10 +10,11 @@ ProTunezFXToysProcessor::ProTunezFXToysProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, &undo, "ProTunezFXToys", createLayout())
+      apvts (*this, nullptr, "ProTunezFXToys", createLayout())
 {
     running.store ((int) getActiveEffect());
     pending = running.load();
+    setLatencySamples (kLatency);
 }
 
 bool ProTunezFXToysProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -69,11 +70,13 @@ void ProTunezFXToysProcessor::prepareToPlay (double sampleRate, int samplesPerBl
             e->prepare (sampleRate, samplesPerBlock);
         }
     fader.prepare (sampleRate);
-    monoScratch.setSize (1, samplesPerBlock);
+    monoScratch.setSize (1, std::max (samplesPerBlock, 8192));
+    for (auto* d : { &dryDelay[0], &dryDelay[1], &comp[0], &comp[1] }) d->allocate (kLatency + 8);
+    bypassMix.prepare (sampleRate, 20.0f);
+    bypassMix.snap (params::getb (apvts, "bypass") ? 1.0f : 0.0f);
     running.store ((int) getActiveEffect());
     pending = running.load();
-    auto* e = engine (getRunningEffect());
-    setLatencySamples (e != nullptr ? e->latency() : 0);
+    setLatencySamples (kLatency);
 }
 
 void ProTunezFXToysProcessor::runEffect (EffectId e, float* l, float* r, int n)
@@ -105,12 +108,11 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (lock.isLocked()) { echo.setPattern (pendingPattern); patternDirty.store (false); }
     }
 
-    // Menu changed: start a fade-out, swap at silence, fade in.
+    // Menu changed: fade out, swap at silence, fade in.
     const int wanted = (int) getActiveEffect();
     if (wanted != pending && ! fader.active()) { pending = wanted; fader.start(); }
     if (pending != running.load() && ! fader.active()) fader.start();
-
-    if (params::getb (apvts, "bypass")) return;
+    bypassMix.setTarget (params::getb (apvts, "bypass") ? 1.0f : 0.0f);
 
     float* l = buffer.getWritePointer (0);
     float* r;
@@ -126,37 +128,8 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     for (int i = 0; i < n; ++i) pin = std::max (pin, std::max (std::fabs (l[i]), std::fabs (r[i])));
     inPeak.store (std::max (pin, inPeak.load() * 0.9f));
 
-    if (! fader.active())
-    {
-        pushParams (getRunningEffect());
-        runEffect (getRunningEffect(), l, r, n);
-    }
-    else
-    {
-        // Find where the swap happens inside this block, process each side with its own effect.
-        float gains[8192];
-        const int m = std::min (n, 8192);
-        int swapAt = -1;
-        for (int i = 0; i < m; ++i)
-        {
-            fader.next();
-            gains[i] = fader.gain();
-            if (fader.swapNow()) swapAt = i;
-        }
-        const int split = swapAt < 0 ? m : swapAt;
-        pushParams (getRunningEffect());
-        runEffect (getRunningEffect(), l, r, split);
-        if (swapAt >= 0)
-        {
-            running.store (pending);
-            if (auto* e = engine (getRunningEffect())) { e->reset(); setLatencySamples (e->latency()); }
-            else setLatencySamples (0);
-            pushParams (getRunningEffect());
-            runEffect (getRunningEffect(), l + split, r + split, m - split);
-        }
-        if (m < n) runEffect (getRunningEffect(), l + m, r + m, n - m);
-        for (int i = 0; i < m; ++i) { l[i] *= gains[i]; r[i] *= gains[i]; }
-    }
+    pushParams (getRunningEffect());
+    for (int done = 0; done < n; done += kChunk) processChunk (l + done, r + done, std::min (kChunk, n - done));
 
     float pout = 0.0f;
     for (int i = 0; i < n; ++i) pout = std::max (pout, std::max (std::fabs (l[i]), std::fabs (r[i])));
@@ -164,6 +137,59 @@ void ProTunezFXToysProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     if (buffer.getNumChannels() < 2)
         for (int i = 0; i < n; ++i) l[i] = 0.5f * (l[i] + r[i]);
+}
+
+void ProTunezFXToysProcessor::processChunk (float* l, float* r, int n)
+{
+    // The untouched input, delayed by the reported latency, for Bypass.
+    for (int i = 0; i < n; ++i)
+    {
+        dryDelay[0].push (l[i]); dryDelay[1].push (r[i]);
+        dryL[i] = dryDelay[0].read (kLatency + 1);
+        dryR[i] = dryDelay[1].read (kLatency + 1);
+    }
+
+    // Run the effect; if the menu changed, swap effects at the silent point of the crossfade.
+    int swapAt = -1;
+    const bool fading = fader.active();
+    if (fading)
+        for (int i = 0; i < n; ++i)
+        {
+            fader.next();
+            gains[i] = fader.gain();
+            if (fader.swapNow() && swapAt < 0) swapAt = i;
+        }
+    const int split = swapAt < 0 ? n : swapAt;
+    auto runWithComp = [this] (float* cl, float* cr, int m)
+    {
+        if (m <= 0) return;
+        runEffect (getRunningEffect(), cl, cr, m);
+        // Effects with less latency than kLatency are delayed so everything lines up.
+        auto* fx = engine (getRunningEffect());
+        const int extra = kLatency - (fx != nullptr ? fx->latency() : 0);
+        if (extra > 0)
+            for (int i = 0; i < m; ++i)
+            {
+                comp[0].push (cl[i]); comp[1].push (cr[i]);
+                cl[i] = comp[0].read (extra + 1); cr[i] = comp[1].read (extra + 1);
+            }
+    };
+    runWithComp (l, r, split);
+    if (swapAt >= 0)
+    {
+        running.store (pending);
+        if (auto* e = engine (getRunningEffect())) e->reset();
+        comp[0].reset(); comp[1].reset();
+        pushParams (getRunningEffect());
+        runWithComp (l + split, r + split, n - split);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        const float g = fading ? gains[i] : 1.0f;
+        const float b = bypassMix.next();
+        l[i] = l[i] * g * (1.0f - b) + dryL[i] * b;
+        r[i] = r[i] * g * (1.0f - b) + dryR[i] * b;
+    }
 }
 
 static juce::String patternToString (const RhythmPattern& p)
@@ -184,6 +210,8 @@ static RhythmPattern patternFromString (const juce::String& s)
     }
     return p;
 }
+
+void ProTunezFXToysProcessor::setEchoPatternString (const juce::String& s) { setEchoPattern (patternFromString (s)); }
 
 void ProTunezFXToysProcessor::setEchoPattern (const RhythmPattern& p)
 {

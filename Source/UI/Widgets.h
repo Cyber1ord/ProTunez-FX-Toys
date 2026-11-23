@@ -9,6 +9,9 @@ namespace ptfx::ui
 {
 using APVTS = juce::AudioProcessorValueTreeState;
 
+/** Tells the plug-in a knob turn or click is starting, so Undo can step back to just before it. */
+void gestureStart (const APVTS& state);
+
 /** Rotary knob: name and value underneath. Shift-drag = fine, double-click = default, right-click = exact value. */
 class Knob : public juce::Component
 {
@@ -23,6 +26,7 @@ public:
     struct FineSlider : juce::Slider
     {
         std::function<void()> onRightClick;
+        std::function<void()> onGestureStart;
         void mouseDown (const juce::MouseEvent& e) override;
     } slider;
 
@@ -46,6 +50,7 @@ public:
 
 private:
     juce::OwnedArray<juce::TextButton> buttons;
+    APVTS& state;
     juce::RangedAudioParameter* param;
     std::unique_ptr<juce::ParameterAttachment> attachment;
     bool vertical;
@@ -59,8 +64,10 @@ class Toggle : public juce::TextButton
 public:
     Toggle (APVTS&, const juce::String& paramId, const juce::String& text, juce::Colour colour);
     void place (int x, int y, int w = 0, int h = 26);
+    void mouseDown (const juce::MouseEvent& e) override { gestureStart (state); juce::TextButton::mouseDown (e); }
 
 private:
+    APVTS& state;
     std::unique_ptr<APVTS::ButtonAttachment> attachment;
 };
 
@@ -69,8 +76,10 @@ class Choice : public juce::ComboBox
 {
 public:
     Choice (APVTS&, const juce::String& paramId, juce::Colour colour);
+    void mouseDown (const juce::MouseEvent& e) override { gestureStart (state); juce::ComboBox::mouseDown (e); }
 
 private:
+    APVTS& state;
     std::unique_ptr<APVTS::ComboBoxAttachment> attachment;
 };
 

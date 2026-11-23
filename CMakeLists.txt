@@ -83,3 +83,13 @@ if(PTFX_BUILD_PLUGIN AND NOT APPLE)
     target_compile_definitions(Screenshots PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
     target_link_libraries(Screenshots PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()
+
+if(PTFX_BUILD_PLUGIN AND PTFX_BUILD_TESTS)
+    # JUCE-based tests: presets and the whole processor.
+    juce_add_console_app(PluginTests PRODUCT_NAME "PluginTests")
+    get_target_property(PTFX_TEST_SOURCES ProTunezFXToys SOURCES)
+    target_sources(PluginTests PRIVATE Tests/PluginTests.cpp ${PTFX_TEST_SOURCES})
+    target_compile_definitions(PluginTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(PluginTests PRIVATE juce::juce_audio_utils juce::juce_dsp Catch2::Catch2WithMain juce::juce_recommended_config_flags)
+    add_test(NAME PluginTests COMMAND PluginTests)
+endif()

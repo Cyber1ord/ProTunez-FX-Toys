@@ -2,8 +2,9 @@
 
 namespace ptfx
 {
-PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state, std::function<EffectId()> activeEffect, juce::File userRoot)
-    : apvts (state), active (std::move (activeEffect)), root (std::move (userRoot))
+PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state, std::function<EffectId()> activeEffect, juce::File userRoot,
+                              GetExtra ge, SetExtra se)
+    : apvts (state), active (std::move (activeEffect)), root (std::move (userRoot)), getExtra (std::move (ge)), setExtra (std::move (se))
 {
     for (int i = 0; i < kNumEffects; ++i) per[i].name = "Default";
 }
@@ -44,13 +45,15 @@ PresetManager::Snapshot PresetManager::snapshot (EffectId e) const
     const juce::String prefix = effectPrefix (e);
     for (auto* p : apvts.processor.getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
-            if (rp->getParameterID().startsWith (prefix)) s[rp->getParameterID()] = rp->getValue();
+            if (rp->getParameterID().startsWith (prefix)) s.values[rp->getParameterID()] = rp->getValue();
+    if (getExtra) s.extra = getExtra (e);
     return s;
 }
 
 void PresetManager::apply (const Snapshot& s)
 {
-    for (auto& [id, v] : s)
+    if (setExtra) setExtra (active(), s.extra);
+    for (auto& [id, v] : s.values)
         if (auto* p = apvts.getParameter (id))
         {
             p->beginChangeGesture();
@@ -62,8 +65,10 @@ void PresetManager::apply (const Snapshot& s)
 void PresetManager::resetToDefaults (EffectId e)
 {
     Snapshot s = snapshot (e);
-    for (auto& [id, v] : s) v = apvts.getParameter (id)->getDefaultValue();
-    apply (s);
+    for (auto& [id, v] : s.values) v = apvts.getParameter (id)->getDefaultValue();
+    s.extra = {};
+    for (auto& [id, v] : s.values) apvts.getParameter (id)->setValueNotifyingHost (v);
+    if (setExtra) setExtra (e, {});
 }
 
 void PresetManager::load (EffectId e, const juce::String& category, const juce::String& name)
@@ -76,8 +81,10 @@ void PresetManager::load (EffectId e, const juce::String& category, const juce::
         Snapshot s;
         for (auto* p : xml->getChildIterator())
             if (p->hasTagName ("PARAM") && p->getStringAttribute ("id").startsWith (effectPrefix (e)))
-                s[p->getStringAttribute ("id")] = (float) p->getDoubleAttribute ("value");
-        apply (s);
+                s.values[p->getStringAttribute ("id")] = (float) p->getDoubleAttribute ("value");
+        if (auto* ex = xml->getChildByName ("EXTRA")) s.extra = ex->getStringAttribute ("value");
+        for (auto& [id, v] : s.values) if (auto* q = apvts.getParameter (id)) q->setValueNotifyingHost (v);
+        if (setExtra) setExtra (e, s.extra);
     }
     else
     {
@@ -107,12 +114,14 @@ bool PresetManager::saveUser (EffectId e, const juce::String& name)
     if (! folder.createDirectory()) return false;
     juce::XmlElement xml ("PTFXPRESET");
     xml.setAttribute ("effect", effectName (e));
-    for (auto& [id, v] : snapshot (e))
+    const auto snap = snapshot (e);
+    for (auto& [id, v] : snap.values)
     {
         auto* c = xml.createNewChildElement ("PARAM");
         c->setAttribute ("id", id);
         c->setAttribute ("value", (double) v);
     }
+    if (snap.extra.isNotEmpty()) xml.createNewChildElement ("EXTRA")->setAttribute ("value", snap.extra);
     if (! xml.writeTo (folder.getChildFile (clean + ".ptfx"))) return false;
     auto& pe = per[(int) e];
     pe.category = "User";

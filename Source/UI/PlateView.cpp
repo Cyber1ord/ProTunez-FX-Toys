@@ -77,6 +77,7 @@ public:
     {
         dragging = -1;
         for (int b = 0; b < 2; ++b) if (handle (b).getDistanceFrom (e.position) < 12.0f) dragging = b;
+        if (dragging >= 0) gestureStart (state);
         if (dragging >= 0) for (auto* id : ids (dragging, false)) state.getParameter (id)->beginChangeGesture();
     }
 

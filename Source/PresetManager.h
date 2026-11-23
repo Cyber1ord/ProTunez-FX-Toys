@@ -21,10 +21,18 @@ const std::vector<FactoryPreset>& factoryPresets (EffectId e);
 class PresetManager
 {
 public:
-    using Snapshot = std::map<juce::String, float>; // parameter id -> normalised value
+    /** Parameter values (normalised) plus any extra state an effect keeps outside its parameters (Echo's rhythm pattern). */
+    struct Snapshot
+    {
+        std::map<juce::String, float> values;
+        juce::String extra;
+        bool empty() const { return values.empty(); }
+    };
+    using GetExtra = std::function<juce::String (EffectId)>;
+    using SetExtra = std::function<void (EffectId, const juce::String&)>;
 
     PresetManager (juce::AudioProcessorValueTreeState& state, std::function<EffectId()> activeEffect,
-                   juce::File userRoot = defaultUserRoot());
+                   juce::File userRoot = defaultUserRoot(), GetExtra getExtra = {}, SetExtra setExtra = {});
 
     static juce::File defaultUserRoot(); // ~/Music/ProTunez FX Toys/Presets
 
@@ -44,6 +52,8 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     std::function<EffectId()> active;
     juce::File root;
+    GetExtra getExtra;
+    SetExtra setExtra;
     struct PerEffect { juce::String category, name; Snapshot loaded, ab[2]; };
     PerEffect per[kNumEffects];
 

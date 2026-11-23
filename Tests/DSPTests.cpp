@@ -3,6 +3,7 @@
 #include "../Source/DSP/Heat.h"
 #include "../Source/DSP/Plate.h"
 #include <catch2/catch_approx.hpp>
+#include <chrono>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <vector>
@@ -618,4 +619,32 @@ TEST_CASE ("Crossfader: switching effects ramps smoothly, never jumps")
     REQUIRE (maxStep < 0.01f);
     REQUIRE (x.gain() == Catch::Approx (1.0f));
     REQUIRE_FALSE (x.active());
+}
+
+TEST_CASE ("Review fix: resetting a long delay line is instant and silences old sound")
+{
+    DelayLine d;
+    d.allocate (1 << 21);
+    for (int i = 0; i < 1000; ++i) d.push (1.0f);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int k = 0; k < 100; ++k) d.reset();
+    const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+    REQUIRE (ms < 5.0);
+    REQUIRE (d.read (10) == 0.0f);
+    REQUIRE (d.readFrac (500.5f) == 0.0f);
+    d.push (0.5f);
+    REQUIRE (d.read (1) == 0.5f);
+    REQUIRE (d.read (2) == 0.0f);
+}
+
+TEST_CASE ("Review fix: Prime Numbers in Rhythm mode at 192 kHz is cheap")
+{
+    auto p = dryEcho(); p.mode = Echo::rhythm; p.prime = true; p.rhythmBeats = 8; p.grid = 2; p.repeats = 16; p.feedback = 0.5f;
+    Echo e; e.setParams (p); e.prepare (192000.0, 512); e.setTempo (120.0);
+    std::vector<float> l (192000), r (192000);
+    l[0] = r[0] = 1.0f;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < l.size(); i += 512) e.process (l.data() + i, r.data() + i, 512);
+    const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+    REQUIRE (ms < 400.0); // one second of audio must take well under a second
 }

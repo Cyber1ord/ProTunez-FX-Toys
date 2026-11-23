@@ -268,20 +268,36 @@ private:
 
     void updateTimes()
     {
-        timeSm[0].setTarget (echoTimeMs (0) * 0.001f * (float) sr);
-        timeSm[1].setTarget (echoTimeMs (1) * 0.001f * (float) sr);
+        const float T = echoTimeMs (0) * 0.001f * (float) sr, T2 = echoTimeMs (1) * 0.001f * (float) sr;
+        timeSm[0].setTarget (T);
+        timeSm[1].setTarget (T2);
+        const float g = clampv (params.groove, -1.0f, 1.0f), fs = feelSamples();
+        const float tA = T * (1.0f - g / 3.0f);
+        ratio[0] = ratioFor (tA - fs);          // Single, first tap
+        ratio[1] = ratioFor (2.0f * T - fs);    // Single, second tap
+        ratio[2] = ratioFor (T - fs);           // Dual, echo 1
+        ratio[3] = ratioFor (T2 - fs);          // Dual, echo 2
+        ratio[4] = ratioFor (tA - fs);          // Ping-Pong, left
+        ratio[5] = ratioFor (2.0f * T - tA);    // Ping-Pong, right
     }
 
     float maxDelay() const { return (float) line[0].capacity() - 8.0f; }
 
-    /** Delay in samples for a base time, with Feel, wobble and Prime Numbers applied. */
-    float delaySamples (float base, float mod) const
+    /** Delay in samples for a base time with wobble applied. Feel and Prime Numbers are already in the base. */
+    float delaySamples (float base, float mod) const { return clampv (base * (1.0f + mod), 2.0f, maxDelay()); }
+
+    float feelSamples() const { return clampv (params.feel, -1.0f, 1.0f) * 0.025f * (float) sr; }
+
+    /** Moves a time to a prime number of samples when Prime Numbers is on (done when settings change, never per sample). */
+    float primeSnap (float samples) const
     {
-        float d = base - clampv (params.feel, -1.0f, 1.0f) * 0.025f * (float) sr;
-        d *= 1.0f + mod;
-        if (params.prime && ! params.freeze) d = (float) nearestPrime ((int) std::lround (d));
-        return clampv (d, 2.0f, maxDelay());
+        if (! params.prime || params.freeze || samples < 2.0f) return samples;
+        return (float) nearestPrime ((int) std::lround (samples));
     }
+
+    /** How much Prime Numbers stretches each tap, as a ratio of its unsnapped length. */
+    float ratio[6] { 1, 1, 1, 1, 1, 1 };
+    float ratioFor (float base) const { return base > 2.0f ? primeSnap (base) / base : 1.0f; }
 
     void wobble (float* mod)
     {
@@ -396,8 +412,9 @@ private:
         const float T = timeSm[0].next();
         timeSm[1].next();
         const float g = clampv (params.groove, -1.0f, 1.0f);
-        const float t1 = delaySamples (T * (1.0f - g / 3.0f), mod[0]);
-        const float t2 = delaySamples (2.0f * T, mod[0]);
+        const float fs = feelSamples();
+        const float t1 = delaySamples ((T * (1.0f - g / 3.0f) - fs) * ratio[0], mod[0]);
+        const float t2 = delaySamples ((2.0f * T - fs) * ratio[1], mod[0]);
         const float tapA = line[0].readFrac (t1), tapB = line[0].readFrac (t2);
         const float loop = params.freeze ? tapB : fb * fb * tapB;
         line[0].push (chain (0, in + loop));
@@ -412,8 +429,9 @@ private:
     // Dual: two independent echoes (left and right) that can feed each other.
     void processDual (float in, float fb, const float* mod, float& eL, float& eR)
     {
-        const float a = line[0].readFrac (delaySamples (timeSm[0].next(), mod[0]));
-        const float b = line[1].readFrac (delaySamples (timeSm[1].next(), mod[1]));
+        const float fs = feelSamples();
+        const float a = line[0].readFrac (delaySamples ((timeSm[0].next() - fs) * ratio[2], mod[0]));
+        const float b = line[1].readFrac (delaySamples ((timeSm[1].next() - fs) * ratio[3], mod[1]));
         const float x = clampv (params.fbMix, 0.0f, 1.0f), fbBal = clampv (params.fbBalance, -1.0f, 1.0f);
         const float fa = fb * std::min (1.0f, 1.0f - fbBal), fbb = fb * std::min (1.0f, 1.0f + fbBal);
         line[0].push (chain (0, in + fa * ((1.0f - x) * a + x * b)));
@@ -429,8 +447,8 @@ private:
         timeSm[1].next();
         const float g = clampv (params.groove, -1.0f, 1.0f);
         const float tA = T * (1.0f - g / 3.0f);
-        const float a = line[0].readFrac (delaySamples (tA, mod[0]));
-        const float b = line[1].readFrac (delaySamples (2.0f * T - tA, mod[1]));
+        const float a = line[0].readFrac (delaySamples ((tA - feelSamples()) * ratio[4], mod[0]));
+        const float b = line[1].readFrac (delaySamples ((2.0f * T - tA) * ratio[5], mod[1]));
         const float f = params.freeze ? 1.0f : fb;
         line[0].push (chain (0, in + f * b));
         line[1].push (chain (1, f * a));
@@ -458,7 +476,7 @@ private:
     void buildTaps()
     {
         const float beatSamples = (float) (60.0 / bpm * sr);
-        loopSamples = std::min ((float) clampv (params.rhythmBeats, 1, 8) * beatSamples, maxDelay());
+        loopSamples = std::min (primeSnap ((float) clampv (params.rhythmBeats, 1, 8) * beatSamples - feelSamples()), maxDelay());
         std::array<float, 16> pos {}, lvl {};
         int count = 0;
         if (custom.count > 0)
@@ -481,7 +499,7 @@ private:
         {
             float p = clampv (pos[(size_t) i], 0.01f, lenBeats);
             if (std::fabs (params.warp) > 0.001f) p = lenBeats * std::pow (p / lenBeats, warpExp);
-            const float samples = p * beatSamples;
+            const float samples = primeSnap (p * beatSamples - feelSamples());
             if (samples > maxDelay()) continue; // out of memory: this tap is skipped (greyed out on screen)
             float pl, pr;
             panFor (i, count, pl, pr);
