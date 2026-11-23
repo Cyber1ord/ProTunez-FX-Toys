@@ -54,6 +54,7 @@ if(PTFX_BUILD_PLUGIN)
         Source/UI/EffectView.cpp
         Source/UI/Header.cpp
         Source/UI/Views.cpp
+        Source/UI/HeatView.cpp
         Source/PluginEditor.cpp)
 
     target_compile_definitions(ProTunezFXToys PUBLIC

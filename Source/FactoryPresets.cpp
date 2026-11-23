@@ -6,16 +6,16 @@ namespace ptfx
 namespace
 {
 const std::vector<FactoryPreset> heat = {
-    { "Church Vocal", "Warm Lead Vocal", { { "heat_drive", 8 }, { "heat_style", 0 }, { "heat_tone", 10 }, { "heat_mix", 60 } } },
-    { "Church Vocal", "Choir Leader Edge", { { "heat_drive", 12 }, { "heat_style", 1 }, { "heat_tone", 20 }, { "heat_mix", 45 } } },
-    { "Podcast Voice", "Radio Warmth", { { "heat_drive", 6 }, { "heat_style", 1 }, { "heat_lowcut", 80 }, { "heat_mix", 50 } } },
-    { "Podcast Voice", "Broadcast Presence", { { "heat_drive", 9 }, { "heat_style", 0 }, { "heat_tone", 25 }, { "heat_mix", 40 } } },
-    { "Choir", "Choir Glue", { { "heat_drive", 5 }, { "heat_style", 1 }, { "heat_mix", 35 } } },
-    { "Choir", "Choir Air", { { "heat_drive", 4 }, { "heat_style", 0 }, { "heat_tone", 30 }, { "heat_mix", 30 } } },
-    { "Music", "Drum Bus Crunch", { { "heat_drive", 18 }, { "heat_style", 2 }, { "heat_mix", 50 } } },
-    { "Music", "Bass Grit", { { "heat_drive", 15 }, { "heat_style", 3 }, { "heat_highcut", 6000 }, { "heat_mix", 60 } } },
-    { "Creative", "Telephone Fuzz", { { "heat_drive", 30 }, { "heat_style", 4 }, { "heat_lowcut", 500 }, { "heat_highcut", 3500 } } },
-    { "Creative", "Blown Speaker", { { "heat_drive", 36 }, { "heat_style", 4 }, { "heat_tone", -40 } } },
+    { "Church Vocal", "Warm Lead Vocal", { { "heat_style", 2 }, { "heat_drive", 3.0f }, { "heat_tone", 10 }, { "heat_mix", 60 }, { "heat_lowcut", 80 } } },
+    { "Church Vocal", "Choir Leader Edge", { { "heat_style", 1 }, { "heat_drive", 4.0f }, { "heat_tone", 20 }, { "heat_mix", 45 } } },
+    { "Podcast Voice", "Radio Warmth", { { "heat_style", 0 }, { "heat_drive", 3.5f }, { "heat_lowcut", 90 }, { "heat_mix", 50 } } },
+    { "Podcast Voice", "Broadcast Presence", { { "heat_style", 2 }, { "heat_drive", 4.0f }, { "heat_tone", 25 }, { "heat_mix", 40 }, { "heat_highcut", 15000 } } },
+    { "Choir", "Choir Glue", { { "heat_style", 0 }, { "heat_drive", 2.5f }, { "heat_mix", 35 } } },
+    { "Choir", "Choir Air", { { "heat_style", 1 }, { "heat_drive", 2.0f }, { "heat_tone", 30 }, { "heat_mix", 30 } } },
+    { "Music", "Drum Bus Crunch", { { "heat_style", 3 }, { "heat_drive", 6.0f }, { "heat_thump", 1 }, { "heat_lowcut", 60 }, { "heat_mix", 50 } } },
+    { "Music", "Massive Bass", { { "heat_style", 3 }, { "heat_drive", 5.0f }, { "heat_thump", 1 }, { "heat_lowcut", 45 }, { "heat_highcut", 6000 }, { "heat_steep", 1 } } },
+    { "Creative", "Telephone Fuzz", { { "heat_style", 4 }, { "heat_drive", 8.0f }, { "heat_lowcut", 500 }, { "heat_highcut", 3500 }, { "heat_steep", 1 } } },
+    { "Creative", "Punished", { { "heat_style", 4 }, { "heat_drive", 7.0f }, { "heat_punish", 1 }, { "heat_tone", -20 } } },
 };
 
 const std::vector<FactoryPreset> echo = {

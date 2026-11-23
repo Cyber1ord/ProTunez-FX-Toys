@@ -51,6 +51,7 @@ Header::Header (ProTunezFXToysProcessor& p) : proc (p), bypass (p.apvts, "bypass
     for (auto* c : std::initializer_list<juce::Component*> { &prev, &next, &presetName, &save, &revert, &undoBtn, &a, &b, &settings, &bypass })
         addAndMakeVisible (c);
     startTimerHz (8);
+    timerCallback();
 }
 
 void Header::timerCallback()

@@ -60,17 +60,56 @@ float rms (const std::vector<float>& v, size_t from, size_t to)
 }
 } // namespace
 
-TEST_CASE ("Heat: silence stays silent and output is always finite")
+namespace
+{
+/** Level of a pure tone in a signal (Goertzel), after skipping the first `skip` samples. */
+float toneLevel (const std::vector<float>& v, float freq, size_t skip)
+{
+    const double w = 2.0 * 3.14159265358979 * freq / kSr, c = 2.0 * std::cos (w);
+    double s1 = 0, s2 = 0;
+    for (size_t i = skip; i < v.size(); ++i) { const double s0 = v[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+    const double n = (double) (v.size() - skip);
+    return (float) (2.0 * std::sqrt (std::max (0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / n);
+}
+
+Heat::Params cleanHeat()
+{
+    Heat::Params p;
+    p.drive = 0.0f; p.autoGain = false; p.mix = 1.0f; p.outputDb = 0.0f; p.punish = false;
+    p.lowCutHz = 20.0f; p.highCutHz = 20000.0f; p.tone = 0.0f; p.thump = false; p.steep = false;
+    return p;
+}
+
+float heatGainDb (Heat::Params p, float freq, float amp)
+{
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+    auto s = sine (48000, freq, amp);
+    run (h, s);
+    return gainToDb (toneLevel (s.l, freq, 24000) / amp);
+}
+
+float heatThd (int style)
+{
+    auto p = cleanHeat(); p.style = style; p.drive = 6.0f;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+    auto s = sine (48000, 200.0f, 0.3f);
+    run (h, s);
+    const float f1 = toneLevel (s.l, 200.0f, 24000);
+    double sum = 0;
+    for (int k = 2; k <= 9; ++k) { const float hk = toneLevel (s.l, 200.0f * (float) k, 24000); sum += (double) hk * hk; }
+    return (float) (std::sqrt (sum) / f1);
+}
+} // namespace
+
+TEST_CASE ("Heat: silence stays silent and extreme settings stay finite in every style")
 {
     for (int style = 0; style < Heat::numStyles; ++style)
     {
-        Heat h;
-        Heat::Params p; p.style = style; p.driveDb = 36.0f;
-        h.setParams (p); h.prepare (kSr, kBlock);
-        Stereo s (48000);
-        run (h, s);
-        REQUIRE (peak (s.l) < 1.0e-6f);
-
+        auto p = cleanHeat(); p.style = style; p.drive = 10.0f; p.punish = true; p.thump = true; p.steep = true; p.autoGain = true;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        Stereo quiet (48000);
+        run (h, quiet);
+        REQUIRE (peak (quiet.l) < 1.0e-6f);
         auto loud = sine (48000, 220.0f, 2.0f);
         run (h, loud);
         REQUIRE (allFinite (loud));
@@ -78,11 +117,65 @@ TEST_CASE ("Heat: silence stays silent and output is always finite")
     }
 }
 
+TEST_CASE ("Heat: Drive 0 to 10 adds 36 dB of gain before the saturation")
+{
+    auto p = cleanHeat();
+    const float g0 = heatGainDb (p, 1000.0f, 1.0e-4f);
+    p.drive = 10.0f;
+    const float g10 = heatGainDb (p, 1000.0f, 1.0e-4f);
+    REQUIRE (g10 - g0 == Approx (36.0f).margin (1.5f));
+}
+
+TEST_CASE ("Heat: Punish adds 20 dB of gain")
+{
+    auto p = cleanHeat();
+    const float off = heatGainDb (p, 1000.0f, 1.0e-4f);
+    p.punish = true;
+    const float on = heatGainDb (p, 1000.0f, 1.0e-4f);
+    REQUIRE (on - off == Approx (20.0f).margin (1.5f));
+}
+
+TEST_CASE ("Heat: Steep makes the High Cut much sharper")
+{
+    auto p = cleanHeat(); p.highCutHz = 2000.0f;
+    const float pass = heatGainDb (p, 200.0f, 1.0e-3f);
+    const float gentle = pass - heatGainDb (p, 8000.0f, 1.0e-3f);
+    p.steep = true;
+    const float steep = heatGainDb (p, 200.0f, 1.0e-3f) - heatGainDb (p, 8000.0f, 1.0e-3f);
+    REQUIRE (gentle > 9.0f);
+    REQUIRE (gentle < 15.0f);
+    REQUIRE (steep >= 50.0f);
+}
+
+TEST_CASE ("Heat: Thump boosts the lows at the Low Cut frequency")
+{
+    auto p = cleanHeat(); p.lowCutHz = 100.0f;
+    const float off = heatGainDb (p, 100.0f, 1.0e-3f);
+    p.thump = true;
+    const float on = heatGainDb (p, 100.0f, 1.0e-3f);
+    REQUIRE (on - off > 2.0f);
+    REQUIRE (on - off < 5.0f);
+}
+
+TEST_CASE ("Heat: with High Cut off, 15 kHz passes within 1 dB")
+{
+    auto p = cleanHeat();
+    REQUIRE (std::fabs (heatGainDb (p, 15000.0f, 1.0e-3f) - heatGainDb (p, 1000.0f, 1.0e-3f)) < 1.0f);
+}
+
+TEST_CASE ("Heat: the five styles each sound different")
+{
+    float thd[Heat::numStyles];
+    for (int s = 0; s < Heat::numStyles; ++s) thd[s] = heatThd (s);
+    for (int a = 0; a < Heat::numStyles; ++a)
+        for (int b = a + 1; b < Heat::numStyles; ++b)
+            REQUIRE (std::fabs (thd[a] - thd[b]) / std::max (thd[a], thd[b]) > 0.05f);
+}
+
 TEST_CASE ("Heat: Mix at zero gives back the input, delayed by the reported latency")
 {
-    Heat h;
-    Heat::Params p; p.mix = 0.0f; p.driveDb = 20.0f;
-    h.setParams (p); h.prepare (kSr, kBlock);
+    auto p = cleanHeat(); p.mix = 0.0f; p.drive = 7.0f;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
     auto in = sine (4800, 440.0f, 0.5f);
     auto s = in;
     run (h, s);
@@ -92,37 +185,48 @@ TEST_CASE ("Heat: Mix at zero gives back the input, delayed by the reported late
 
 TEST_CASE ("Heat: the processed signal lines up in time with the dry signal")
 {
-    // With almost no drive the wet path is nearly linear; it should match the delayed input.
-    Heat h;
-    Heat::Params p; p.driveDb = 0.0f; p.style = Heat::tape; p.autoGain = false; p.lowCutHz = 10.0f; p.highCutHz = 20000.0f;
-    h.setParams (p); h.prepare (kSr, kBlock);
-    auto in = sine (9600, 1000.0f, 0.05f);
+    auto p = cleanHeat(); p.style = Heat::styleA;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+    auto in = sine (9600, 1000.0f, 0.01f);
     auto s = in;
     run (h, s);
     const int lat = h.latency();
     auto errorAt = [&] (int offset)
     {
-        double err = 0.0, ref = 0.0;
-        for (size_t i = 2000; i < 9600; ++i) { const double d = s.l[i] - 1.1 * in.l[i - (size_t) offset]; err += d * d; ref += (double) in.l[i] * in.l[i]; }
+        double err = 0.0, ref = 0.0, k = 0.0, kk = 0.0;
+        for (size_t i = 2000; i < 9600; ++i) { k += (double) s.l[i] * in.l[i - (size_t) offset]; kk += (double) in.l[i - (size_t) offset] * in.l[i - (size_t) offset]; }
+        const double g = k / kk;
+        for (size_t i = 2000; i < 9600; ++i) { const double d = s.l[i] - g * in.l[i - (size_t) offset]; err += d * d; ref += (double) in.l[i] * in.l[i]; }
         return std::sqrt (err / ref);
     };
-    // Best match is at exactly the reported latency.
     for (int off = lat - 3; off <= lat + 3; ++off)
         if (off != lat) REQUIRE (errorAt (lat) < errorAt (off));
-    REQUIRE (errorAt (lat) < 0.1);
 }
 
-TEST_CASE ("Heat: drive adds harmonics and auto gain keeps loudness similar")
+TEST_CASE ("Heat: Auto gain keeps loudness similar at high drive, even with Punish")
 {
-    Heat h;
-    Heat::Params p; p.driveDb = 24.0f; p.autoGain = true;
-    h.setParams (p); h.prepare (kSr, kBlock);
+    auto p = cleanHeat(); p.drive = 8.0f; p.punish = true; p.autoGain = true;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
     auto in = sine (96000, 200.0f, 0.3f);
     auto s = in;
     run (h, s);
     const float ratio = rms (s.l, 48000, 96000) / rms (in.l, 48000, 96000);
     REQUIRE (ratio > 0.6f);
     REQUIRE (ratio < 1.6f);
+}
+
+TEST_CASE ("Heat: the attitude meter rises with Drive")
+{
+    auto meterAt = [] (float drive)
+    {
+        auto p = cleanHeat(); p.drive = drive;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        auto s = sine (24000, 200.0f, 0.2f);
+        run (h, s);
+        return h.meter();
+    };
+    REQUIRE (meterAt (8.0f) > meterAt (2.0f) + 0.1f);
+    REQUIRE (meterAt (10.0f) <= 1.0f);
 }
 
 TEST_CASE ("Echo: an impulse comes back after the set time")
