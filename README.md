@@ -8,14 +8,16 @@ Made for church service vocals, podcast voices and music production. For persona
 
 | Effect | Like | Status |
 |---|---|---|
-| **Heat** | Decapitator | ✅ 0.2.0: styles A/E/N/T/P, Drive 0–10, Punish, Attitude meter, Low Cut + Thump, Tone, High Cut + Steep, Auto, Mix |
-| **Echo** | EchoBoy | ✅ 0.2.0: 30 styles, Single/Dual/Ping-Pong/Rhythm, Tap tempo, Groove, Feel, Prime Numbers, Style Edit, Rhythm Editor, Duck, Freeze |
-| **Plate** | SuperPlate | ✅ 0.2.0: 5 plates, Tube/Solid/Clean preamps, decay to ∞, Pre-Delay, Modulation, filters, 2-band EQ, Width, Duck, Freeze |
-| Voice Morph | Little AlterBoy | coming next |
-| Wider | MicroShift | coming next |
-| Filter | FilterFreak | coming next |
-| Crystal Echo | Crystallizer | later |
-| Space | SpaceBlender | later |
+| **Heat** | Decapitator | ✅ 0.3.0: new analog engine. Each style (A tape, E console, N preamp, T triode, P pentode) has its own circuit model (tape hysteresis, transformers, tube stages), run at 4x oversampling. Drive 0–10, Punish, Attitude meter, Low Cut + Thump, Tone, High Cut + Steep, Auto, Mix |
+| **Echo** | EchoBoy | ✅ 0.3.0: 30 styles, each now with its own machine engine (tape with wow and flutter, BBD, lo-fi digital, radio, spring), Single/Dual/Ping-Pong/Rhythm, Tap tempo, Groove, Feel, Prime Numbers, Style Edit, Rhythm Editor, Duck, Freeze |
+| **Plate** | SuperPlate | ✅ 0.3.0: new reverb tank (16-line feedback delay network with per-band decay) and plate dispersion; 5 plates, Tube/Solid/Clean preamps, decay to ∞, Pre-Delay, Modulation, filters, 2-band EQ, Width, Duck, Freeze |
+| Voice Morph | Little AlterBoy | coming soon |
+| Wider | MicroShift | coming soon |
+| Filter | FilterFreak | coming soon |
+| Crystal Echo | Crystallizer | coming soon |
+| Space | SpaceBlender | coming soon |
+
+Voice Morph, Wider, Filter, Crystal Echo and Space are still coming soon; they are not in 0.3.0.
 
 Every effect has a **Tweak** button for its hidden controls. Shift-drag a knob for fine control, double-click to reset,
 right-click for the exact value. The header has presets (Church Vocal, Podcast Voice, Choir, Music, Creative + your own),
