@@ -1,4 +1,5 @@
 // Tests for the ProTunez FX Toys sound engines. Run on any computer (no JUCE needed).
+#include "../Source/DSP/Analog.h"
 #include "../Source/DSP/Echo.h"
 #include "../Source/DSP/Heat.h"
 #include "../Source/DSP/Plate.h"
@@ -1231,4 +1232,52 @@ TEST_CASE ("Review fix: Prime Numbers in Rhythm mode at 192 kHz is cheap")
     for (size_t i = 0; i < l.size(); i += 512) e.process (l.data() + i, r.data() + i, 512);
     const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
     REQUIRE (ms < 400.0); // one second of audio must take well under a second
+}
+
+TEST_CASE ("Review fix: Heat prepared on tape then switched to triode still sags")
+{
+    auto p = cleanHeat(); p.style = Heat::styleA; p.drive = 8.0f;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+    p.style = Heat::styleT;
+    h.setParams (p);
+    auto s = sine (48000, 300.0f, 0.1f);
+    run (h, s);
+    const float dip = gainToDb (rms (s.l, 240, 720) / rms (s.l, 14400, 19200));
+    INFO ("dip " << dip << " dB (a correctly prepared triode gives ~6.7 dB)");
+    REQUIRE (dip >= 5.0f);
+}
+
+TEST_CASE ("Review fix: an out-of-range Heat style behaves exactly like the tape style")
+{
+    auto render = [] (int style)
+    {
+        auto p = cleanHeat(); p.style = style; p.drive = 4.0f;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        auto s = sine (4800, 300.0f, 0.1f);
+        run (h, s);
+        return s.l;
+    };
+    const auto a = render (Heat::styleA), bad = render (-1);
+    float d1 = 0.0f;
+    for (size_t i = 0; i < a.size(); ++i) { d1 = std::max (d1, std::fabs (a[i] - bad[i])); }
+    INFO ("max diff style -1 vs A: " << d1);
+    REQUIRE (d1 < 1.0e-6f);
+}
+
+TEST_CASE ("Review fix: BbdColour re-prepared at a new sample rate matches a fresh instance")
+{
+    auto run1 = [] (BbdColour& b)
+    {
+        std::vector<float> out;
+        for (int i = 0; i < 2000; ++i) out.push_back (b.post (b.pre (i == 0 ? 1.0f : 0.0f)));
+        return out;
+    };
+    BbdColour reused; reused.prepare (48000.0); reused.setDelaySeconds (0.3f);
+    reused.prepare (96000.0); reused.setDelaySeconds (0.3f);
+    BbdColour fresh; fresh.prepare (96000.0); fresh.setDelaySeconds (0.3f);
+    const auto a = run1 (reused), b = run1 (fresh);
+    float diff = 0.0f;
+    for (size_t i = 0; i < a.size(); ++i) diff = std::max (diff, std::fabs (a[i] - b[i]));
+    INFO ("max diff " << diff);
+    REQUIRE (diff <= 1.0e-6f);
 }

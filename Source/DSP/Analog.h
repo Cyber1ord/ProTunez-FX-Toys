@@ -246,7 +246,7 @@ private:
 class BbdColour
 {
 public:
-    void prepare (double sampleRate) { sr = sampleRate; setDelaySeconds (0.3f); reset(); }
+    void prepare (double sampleRate) { sr = sampleRate; cutoff = -1.0f; setDelaySeconds (0.3f); reset(); }
     void reset() { for (auto* f : { &aa1, &aa2, &rc1, &rc2 }) f->reset(); }
     void setNoise (float amount) { noiseAmt = amount; }
     void setDelaySeconds (float s)

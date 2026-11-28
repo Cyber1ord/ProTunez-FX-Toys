@@ -28,8 +28,9 @@ public:
 
     void setParams (const Params& p)
     {
-        const bool styleChanged = p.style != configuredStyle;
         params = p;
+        params.style = clampv (p.style, 0, (int) numStyles - 1);
+        const bool styleChanged = params.style != configuredStyle;
         const float driveDb = clampv (p.drive, 0.0f, 10.0f) * 3.6f + (p.punish ? 20.0f : 0.0f);
         drive.setTarget (dbToGain (driveDb));
         mix.setTarget (clampv (p.mix, 0.0f, 1.0f));
@@ -99,7 +100,7 @@ public:
                 os[c].up (pre, up);
                 for (auto& v : up) v = core (c, v);
                 float y = os[c].down (up);
-                if (params.style == styleA) y = hfLoss[c].process (bump[c].process (y));
+                if (configuredStyle == styleA) y = hfLoss[c].process (bump[c].process (y));
                 y = dc[c].process (y);
                 y = tilt[c].process (y);
                 if (highCutOn)
@@ -189,16 +190,16 @@ private:
         {
             tIn[c].prepare (4.0 * sr, k.inHz, k.inAmt);
             if (hasOutTransformer) tOut[c].prepare (4.0 * sr, k.outHz, k.outAmt);
+            // Prepare both stage types whatever the style, so a style switch (or a rate change) never meets stale coefficients.
+            if (full) { tape[c].prepare (4.0 * sr); tube[c].prepare (4.0 * sr); }
+            bump[c].prepare (sr);
             if (st == styleA)
             {
-                if (full) tape[c].prepare (4.0 * sr);
                 tape[c].setDrive (1.5f);
-                bump[c].prepare (sr);
                 bump[c].set (80.0f, 2.0f);
             }
             else
             {
-                if (full) tube[c].prepare (4.0 * sr);
                 tube[c].setDrive (k.stageDrive); tube[c].setBias (k.bias); tube[c].setBiasShift (k.biasShift);
                 tube[c].setSag (k.sag); tube[c].setCurve (k.soft, k.neg);
             }
