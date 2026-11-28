@@ -587,6 +587,262 @@ TEST_CASE ("Echo: long times at 192 kHz stay in range")
     for (float v : l) REQUIRE (std::isfinite (v));
 }
 
+// ---------------------------------------------------------------- Echo deep engines
+namespace
+{
+Echo::Params engineOnly (int styleIndex)
+{
+    auto p = dryEcho();
+    p.styleIndex = styleIndex;
+    return p;
+}
+
+/** dB of rms (high-passed at 4 kHz) / rms in [from, to). */
+float hfShareDb (const std::vector<float>& v, size_t from, size_t to)
+{
+    Biquad f; f.set (Biquad::Type::highPass, 4000.0f, 0.707f, 0.0f, kSr);
+    std::vector<float> h (v.size());
+    for (size_t i = 0; i < v.size(); ++i) h[i] = f.process (v[i]);
+    return gainToDb (rms (h, from, to) / std::max (1.0e-9f, rms (v, from, to)));
+}
+
+float lfShareDb (const std::vector<float>& v, size_t from, size_t to)
+{
+    Biquad f; f.set (Biquad::Type::lowPass, 250.0f, 0.707f, 0.0f, kSr);
+    std::vector<float> h (v.size());
+    for (size_t i = 0; i < v.size(); ++i) h[i] = f.process (v[i]);
+    return gainToDb (rms (h, from, to) / std::max (1.0e-9f, rms (v, from, to)));
+}
+
+struct EngineSig { float hfDb, lfDb, corr; };
+
+EngineSig echoSignature (int styleIndex)
+{
+    auto p = engineOnly (styleIndex); p.timeMs = 1000.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    Stereo s ((int) (kSr * 2.5));
+    NoiseSource n;
+    for (int i = 0; i < (int) (kSr * 1.5); ++i) s.l[(size_t) i] = s.r[(size_t) i] = 0.25f * n.white();
+    const std::vector<float> x = s.l;
+    run (e, s);
+    const size_t from = 52800, to = 96000;
+    EngineSig sig { hfShareDb (s.l, from, to), lfShareDb (s.l, from, to), 0.0f };
+    double best = 0.0;
+    for (size_t lag = 47520; lag <= 48480; ++lag)
+    {
+        double xy = 0, xx = 0, yy = 0;
+        for (size_t i = from; i < to; ++i) { const double a = x[i - lag], b = s.l[i]; xy += a * b; xx += a * a; yy += b * b; }
+        best = std::max (best, std::fabs (xy) / std::sqrt (std::max (1.0e-30, xx * yy)));
+    }
+    sig.corr = (float) best;
+    return sig;
+}
+
+/** HF share of the first echo of 1.5 s of white noise (window from delay + 100 ms, 0.9 s long). */
+float firstEchoHfDb (int styleIndex, float ms)
+{
+    auto p = engineOnly (styleIndex); p.timeMs = ms;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    const size_t delay = (size_t) (ms * 0.001 * kSr);
+    Stereo s ((int) (kSr * 1.5) + (int) delay + (int) kSr);
+    NoiseSource n;
+    for (int i = 0; i < (int) (kSr * 1.5); ++i) s.l[(size_t) i] = s.r[(size_t) i] = 0.25f * n.white();
+    run (e, s);
+    const size_t from = delay + (size_t) (0.1 * kSr);
+    return hfShareDb (s.l, from, from + (size_t) (0.9 * kSr));
+}
+
+float styleBound (int style)
+{
+    const auto& st = Echo::styles()[(size_t) style].edit;
+    return 4.0f * dbToGain (std::max ({ 0.0f, st.lowG, st.midG, st.highG }));
+}
+} // namespace
+
+TEST_CASE ("Echo: each engine kind has its own sound")
+{
+    const int ids[6] = { 1, 6, 16, 11, 8, 15 }; // tape, bbd, digital, radio, spring, clean
+    EngineSig sig[6];
+    for (int i = 0; i < 6; ++i) sig[i] = echoSignature (ids[i]);
+    for (int a = 0; a < 6; ++a)
+        for (int b = a + 1; b < 6; ++b)
+        {
+            INFO ("styles " << ids[a] << " and " << ids[b] << ": hf " << sig[a].hfDb << "/" << sig[b].hfDb << " lf " << sig[a].lfDb << "/" << sig[b].lfDb
+                  << " corr " << sig[a].corr << "/" << sig[b].corr);
+            CHECK ((std::fabs (sig[a].hfDb - sig[b].hfDb) >= 1.5f || std::fabs (sig[a].lfDb - sig[b].lfDb) >= 1.5f
+                    || std::fabs (sig[a].corr - sig[b].corr) >= 0.1f));
+        }
+}
+
+TEST_CASE ("Echo: BBD echoes lose treble as the delay gets longer")
+{
+    const float hf50 = firstEchoHfDb (6, 50.0f), hf150 = firstEchoHfDb (6, 150.0f), hf500 = firstEchoHfDb (6, 500.0f);
+    INFO (hf50 << " " << hf150 << " " << hf500);
+    REQUIRE (hf50 - hf150 >= 3.0f);
+    REQUIRE (hf150 - hf500 >= 10.0f);
+}
+
+TEST_CASE ("Echo: tape echoes get darker as the tape slows down")
+{
+    const float hf100 = firstEchoHfDb (1, 100.0f), hf1000 = firstEchoHfDb (1, 1000.0f);
+    INFO (hf100 << " " << hf1000);
+    REQUIRE (hf100 - hf1000 >= 4.0f);
+}
+
+TEST_CASE ("Echo: a cheap digital echo drops its sample rate on long delays")
+{
+    auto ratioDb = [] (float ms)
+    {
+        auto p = engineOnly (16); p.timeMs = ms;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine ((int) (kSr * 2), 1000.0f, 0.1f);
+        run (e, s);
+        return gainToDb (toneLevel (s.l, 15000.0f, (size_t) (kSr * 1.5)) / toneLevel (s.l, 1000.0f, (size_t) (kSr * 1.5)));
+    };
+    const float slow = ratioDb (1000.0f), fast = ratioDb (100.0f);
+    INFO (slow << " " << fast);
+    REQUIRE (slow > -35.0f);
+    REQUIRE (fast < -60.0f);
+}
+
+TEST_CASE ("Echo: radio styles are band-limited")
+{
+    auto level = [] (float freq)
+    {
+        auto p = engineOnly (11); p.timeMs = 100.0f;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine ((int) kSr, freq, 0.1f);
+        run (e, s);
+        return gainToDb (toneLevel (s.l, freq, (size_t) (kSr * 0.5)));
+    };
+    const float g80 = level (80.0f), g1k = level (1000.0f), g9k = level (9000.0f);
+    INFO (g80 << " " << g1k << " " << g9k);
+    REQUIRE (g80 - g1k <= -20.0f);
+    REQUIRE (g9k - g1k <= -20.0f);
+}
+
+TEST_CASE ("Echo: the oil can smear keeps the echo on time")
+{
+    auto p = engineOnly (8); p.timeMs = 100.0f;
+    Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+    auto s = impulseThrough (e, 12000);
+    size_t best = 0; float bv = 0.0f;
+    for (size_t i = 0; i < s.l.size(); ++i) if (std::fabs (s.l[i]) > bv) { bv = std::fabs (s.l[i]); best = i; }
+    INFO ("peak at " << best);
+    REQUIRE ((int) best >= 4800 - 96);
+    REQUIRE ((int) best <= 4800 + 96);
+}
+
+TEST_CASE ("Echo: every style stays finite and bounded at 110 % feedback in every mode")
+{
+    for (int style = 0; style < Echo::numStyles(); ++style)
+        for (int mode = 0; mode < Echo::numModes; ++mode)
+        {
+            auto p = dryEcho(); Echo::applyStyle (p, style);
+            p.mode = mode; p.feedback = 1.1f; p.saturation = 0.5f; p.timeMs = 50.0f; p.groove = 0.5f;
+            Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+            auto s = sine ((int) kSr * 4, 300.0f, 0.5f);
+            run (e, s);
+            INFO ("style " << style << " mode " << mode);
+            REQUIRE (allFinite (s));
+            REQUIRE (peak (s.l) < styleBound (style));
+        }
+}
+
+TEST_CASE ("Echo: one minute at 110 % feedback through each engine stays below +12 dBFS")
+{
+    for (int style : { 1, 6, 16, 11, 8 })
+    {
+        auto p = engineOnly (style); p.feedback = 1.1f; p.saturation = 0.3f; p.timeMs = 230.0f;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine ((int) kSr * 60, 220.0f, 0.5f);
+        run (e, s);
+        INFO ("style " << style);
+        REQUIRE (allFinite (s));
+        REQUIRE (peak (s.l) < dbToGain (12.0f));
+    }
+}
+
+TEST_CASE ("Echo: every style processes 1 s of 48 kHz stereo in under 250 ms")
+{
+    double worst = 0.0;
+    for (int style = 0; style < Echo::numStyles(); ++style)
+    {
+        auto p = dryEcho(); Echo::applyStyle (p, style);
+        p.mode = Echo::pingPong; p.feedback = 0.9f; p.saturation = 0.5f;
+        p.style.diffAmount = 0.5f; p.style.diffLoop = true; p.style.wobDepth = 0.5f;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        auto s = sine (48000, 220.0f, 0.5f);
+        const auto t0 = std::chrono::steady_clock::now();
+        run (e, s);
+        const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+        worst = std::max (worst, ms);
+        INFO ("style " << style << ": " << ms << " ms");
+        UNSCOPED_INFO ("Echo CPU style " << style << ": " << ms << " ms");
+        REQUIRE (ms < 250.0);
+    }
+    UNSCOPED_INFO ("Echo CPU worst: " << worst << " ms");
+}
+
+TEST_CASE ("Echo: every style is silent, DC-free, finite and lets go at 44.1 and 96 kHz")
+{
+    for (double rate : { 44100.0, 96000.0 })
+        for (int style = 0; style < Echo::numStyles(); ++style)
+        {
+            auto p = dryEcho(); Echo::applyStyle (p, style);
+            p.mode = Echo::single; p.timeMs = 100.0f; p.feedback = 0.0f; p.saturation = 0.5f;
+            Echo e; e.setParams (p); e.prepare (rate, kBlock);
+            const int n = (int) rate;
+            auto runAt = [&] (Stereo& s) { for (size_t i = 0; i < s.l.size(); i += kBlock) { const int m = (int) std::min ((size_t) kBlock, s.l.size() - i); e.process (s.l.data() + i, s.r.data() + i, m); } };
+            INFO ("style " << style << " rate " << rate);
+
+            Stereo quiet (n); runAt (quiet);
+            REQUIRE (peak (quiet.l) < 1.0e-6f);
+
+            Stereo sq (n);
+            for (int i = 0; i < n; ++i) sq.l[(size_t) i] = sq.r[(size_t) i] = ((i / 50) % 2 == 0) ? 1.0f : -1.0f;
+            runAt (sq);
+            REQUIRE (allFinite (sq));
+            REQUIRE (peak (sq.l) < styleBound (style));
+
+            Stereo dc (2 * n);
+            for (auto& v : dc.l) v = 0.5f;
+            for (auto& v : dc.r) v = 0.5f;
+            runAt (dc);
+            REQUIRE (allFinite (dc));
+            double mean = 0; for (int i = n; i < 2 * n; ++i) mean += dc.l[(size_t) i];
+            REQUIRE (std::fabs (mean / n) < 1.0e-3);
+
+            Stereo tail (n); runAt (tail);
+            REQUIRE (peak (tail.l, (size_t) (n / 2)) < 1.0e-6f);
+        }
+}
+
+TEST_CASE ("Echo: a tempo change mid-delay glides without clicks on every engine")
+{
+    for (int style : { 1, 6, 16, 11, 8, 15 })
+    {
+        auto p = engineOnly (style); p.timeMode = Echo::timeNote; p.note = Echo::noteQuarter; p.feedback = 0.6f;
+        Echo e; e.setParams (p); e.prepare (kSr, kBlock);
+        e.setTempo (120.0);
+        auto s = sine ((int) kSr * 3, 440.0f, 0.3f);
+        for (int seg = 0; seg < 3; ++seg)
+        {
+            if (seg == 1) e.setTempo (90.0);
+            if (seg == 2) e.setTempo (160.0);
+            for (size_t i = (size_t) seg * 48000; i < (size_t) (seg + 1) * 48000; i += kBlock)
+                e.process (s.l.data() + i, s.r.data() + i, (int) std::min<size_t> (kBlock, (size_t) (seg + 1) * 48000 - i));
+        }
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < s.l.size(); ++i) maxStep = std::max (maxStep, std::fabs (s.l[i] - s.l[i - 1]));
+        INFO ("style " << style << " max step " << maxStep);
+        REQUIRE (allFinite (s));
+        REQUIRE (peak (s.l) < 4.0f);
+        REQUIRE (maxStep < 0.25f);
+    }
+}
+
+
 namespace
 {
 Plate::Params wetPlate()

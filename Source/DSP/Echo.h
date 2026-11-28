@@ -1,6 +1,7 @@
 // ProTunez FX Toys — "Echo" (like EchoBoy): 30 echo styles, four modes, groove, rhythm taps, ducking, freeze.
 #pragma once
 
+#include "Analog.h"
 #include "Common.h"
 #include <array>
 #include <cstring>
@@ -78,6 +79,7 @@ public:
         float warp = 0.0f;        // -1..1 (Rhythm, clusters taps)
         int   panShape = panCenter;
         StyleEdit style;
+        int   styleIndex = -1;    // which style's engine to run (-1 = none)
         float duck = 0.0f;        // 0..1
         bool  freeze = false;
     };
@@ -117,7 +119,27 @@ public:
         return v;
     }
 
-    struct StyleDef { const char* name; StyleEdit edit; };
+    /** What kind of machine a style models. The defaults of EngineDef mean "no colour". */
+    enum class EngineKind { digital, tape, bbd, radio, spring };
+
+    struct EngineDef
+    {
+        EngineKind kind = EngineKind::digital;
+        // tape
+        float tapeDrive = 1.0f, hystMix = 0.0f, gapHz = 20000.0f, bumpDb = 0.0f, wow = 0.0f, flutter = 0.0f;
+        // bbd
+        float bbdScale = 1.0f; bool compander = false;
+        // digital (0 = off)
+        int bits = 0; float memSamples = 0.0f;
+        // radio
+        float loHz = 20.0f, hiHz = 20000.0f, drive = 1.0f, asym = 0.0f, fadeDepth = 0.0f, fadeHz = 0.0f;
+        // spring / chorus smear
+        float smearAmt = 0.0f, smearSize = 1.0f, smearModMs = 0.0f, smearHz = 1.0f;
+        // shared: noise floor in dB, <= -120 means off
+        float noiseDb = -200.0f;
+    };
+
+    struct StyleDef { const char* name; StyleEdit edit; EngineDef engine; };
     static const std::vector<StyleDef>& styles();
     static int numStyles() { return (int) styles().size(); }
     static int styleIndex (const char* name)
@@ -127,6 +149,7 @@ public:
     }
     static void applyStyle (Params& p, int index)
     {
+        p.styleIndex = index;
         if (index >= 0 && index < numStyles()) p.style = styles()[(size_t) index].edit;
     }
 
@@ -140,6 +163,8 @@ public:
         outGain.setTarget (dbToGain (clampv (p.outDb, -24.0f, 24.0f)));
         feedback.setTarget (p.freeze ? 1.0f : clampv (p.feedback, 0.0f, 1.1f));
         width.setTarget (clampv (p.width, 0.0f, 1.0f));
+        if (p.styleIndex != engApplied) applyEngine();
+        smearComp.setTarget (eng.kind == EngineKind::spring && ! p.freeze ? smearSumSamples() : 0.0f);
         updateTimes();
         updateFilters();
         buildTaps();
@@ -171,10 +196,20 @@ public:
         for (int c = 0; c < 2; ++c) for (auto& ap : diff[c]) ap.allocate ((int) (0.05 * sr) + 8);
         for (auto* s : { &mix, &inGain, &outGain, &feedback, &width, &duckGain }) s->prepare (sr, 30.0f);
         for (auto& t : timeSm) t.prepare (sr, 120.0f); // glide = tape-style pitch bend when the time changes
+        smearComp.prepare (sr, 120.0f);
+        for (int c = 0; c < 2; ++c)
+        {
+            for (auto& ap : spr[c]) ap.allocate ((int) (0.012 * sr) + 8);
+            hyst[c].prepare (sr); bump[c].prepare (sr); bbd[c].prepare (sr); comp[c].prepare (sr);
+        }
+        envRel = (float) std::exp (-1.0 / (0.05 * sr));
+        engApplied = -2;
         setParams (params);
         for (auto* s : { &mix, &inGain, &outGain, &feedback, &width }) s->snap (s->getTarget());
         duckGain.snap (1.0f);
         for (auto& t : timeSm) t.snap (t.getTarget());
+        smearComp.snap (smearComp.getTarget());
+        applyEngine();
         duckAtt = (float) std::exp (-1.0 / (0.005 * sr));
         duckRel = (float) std::exp (-1.0 / (0.25 * sr));
         reset();
@@ -192,6 +227,14 @@ public:
             pumpEnv[c] = 0.0f;
             postDiffOn[c] = false;
         }
+        for (int c = 0; c < 2; ++c)
+        {
+            for (auto* f : { &preEmph[c], &deEmph[c], &gapLp[c], &rad[c][0], &rad[c][1], &rad[c][2], &rad[c][3] }) f->reset();
+            for (auto& ap : spr[c]) ap.reset();
+            hyst[c].reset(); bump[c].reset(); bbd[c].reset(); comp[c].reset();
+            shHeld[c] = shAcc[c] = nzEnv[c] = 0.0f;
+        }
+        wowPh = 0.0f; wowRate = 1.0f; flutPh[0] = flutPh[1] = flutPh[2] = 0.0f; springPh = 0.0f; fadePh = 0.0f;
         duckEnv = 0.0f;
         wobPhase = 0.0f; walk[0] = walk[1] = 0.0f; sh[0] = sh[1] = shSmooth[0] = shSmooth[1] = 0.0f;
     }
@@ -200,6 +243,7 @@ public:
     {
         for (int i = 0; i < n; ++i)
         {
+            if ((++engCtr & 31) == 0) updateEngineCoefs (false);
             const float ig = inGain.next(), og = outGain.next(), fb = feedback.next(), m = mix.next(), w = width.next();
             const float dryL = left[i], dryR = right[i];
             const float in = params.freeze ? 0.0f : 0.5f * (dryL + dryR) * ig;
@@ -213,6 +257,8 @@ public:
 
             float mod[2];
             wobble (mod);
+            smearComp.next();
+            const float fade = engineTick (mod);
 
             float eL = 0.0f, eR = 0.0f;
             switch (params.mode)
@@ -236,6 +282,7 @@ public:
             float e[2] = { eL, eR };
             for (int c = 0; c < 2; ++c)
             {
+                e[c] = engineOut (c, e[c], fade);
                 e[c] = oHigh[c].process (oMid[c].process (oLow[c].process (e[c])));
                 if (! params.style.diffLoop && params.style.diffAmount > 0.001f) e[c] = diffuse (c, e[c]);
             }
@@ -264,6 +311,23 @@ private:
     int tapCount = 0;
     float loopSamples = 48000.0f;
 
+    // ------------------------------------------------------------------ engine state
+    EngineDef eng;
+    int engApplied = -2, engCtr = 0;
+    Biquad preEmph[2], deEmph[2], gapLp[2], rad[2][4];
+    TapeHysteresis hyst[2];
+    HeadBump bump[2];
+    BbdColour bbd[2];
+    Compander comp[2];
+    DelayLine spr[2][4];
+    Smoothed smearComp;
+    NoiseSource nz[2], wowNoise;
+    float shHeld[2] {}, shAcc[2] {}, fsRatio[2] { 1.0f, 1.0f }, nzEnv[2] {};
+    float lastGap[2] {}, lastBump[2] {}, lastBbd[2] {}, lastFs[2] {};
+    float wowPh = 0.0f, wowRate = 1.0f, flutPh[3] {}, springPh = 0.0f, fadePh = 0.0f;
+    float springLen[4] { 2.0f, 2.0f, 2.0f, 2.0f };
+    float noiseLin = 0.0f, envRel = 0.999f;
+
     // ------------------------------------------------------------------ building blocks
 
     void updateTimes()
@@ -284,7 +348,7 @@ private:
     float maxDelay() const { return (float) line[0].capacity() - 8.0f; }
 
     /** Delay in samples for a base time with wobble applied. Feel and Prime Numbers are already in the base. */
-    float delaySamples (float base, float mod) const { return clampv (base * (1.0f + mod), 2.0f, maxDelay()); }
+    float delaySamples (float base, float mod) const { return clampv (base * (1.0f + mod) - smearComp.get(), 2.0f, maxDelay()); }
 
     float feelSamples() const { return clampv (params.feel, -1.0f, 1.0f) * 0.025f * (float) sr; }
 
@@ -381,7 +445,200 @@ private:
         return x;
     }
 
-    /** What happens to the signal each time round the loop: filters, decay EQ, saturation, diffusion. */
+    // ------------------------------------------------------------------ deep engines
+
+    static constexpr float kSmearMs[4] = { 1.3f, 2.1f, 3.4f, 5.5f };
+
+    float smearSumSamples() const
+    {
+        return (kSmearMs[0] + kSmearMs[1] + kSmearMs[2] + kSmearMs[3]) * clampv (eng.smearSize, 0.0f, 2.0f) * 0.001f * (float) sr;
+    }
+
+    /** Takes the engine of the chosen style. Only settings change here: the state of the blocks is left alone. */
+    void applyEngine()
+    {
+        engApplied = params.styleIndex;
+        eng = (engApplied >= 0 && engApplied < numStyles()) ? styles()[(size_t) engApplied].engine : EngineDef {};
+        noiseLin = eng.noiseDb <= -120.0f ? 0.0f : dbToGain (eng.noiseDb);
+        for (int c = 0; c < 2; ++c)
+        {
+            hyst[c].setDrive (eng.tapeDrive);
+            bbd[c].setNoise (0.0f);
+            preEmph[c].set (Biquad::Type::highShelf, 3000.0f, 0.7f, 6.0f, sr);
+            deEmph[c].set (Biquad::Type::highShelf, 3000.0f, 0.7f, -6.0f, sr);
+            for (int k = 0; k < 2; ++k)
+            {
+                rad[c][k].set (Biquad::Type::highPass, eng.loHz, 0.707f, 0.0f, sr);
+                rad[c][k + 2].set (Biquad::Type::lowPass, eng.hiHz, 0.707f, 0.0f, sr);
+            }
+        }
+        updateEngineCoefs (true);
+    }
+
+    float engineTSec (int c) const
+    {
+        float samples;
+        if (params.mode == rhythm) samples = loopSamples;
+        else if (params.mode == dual && c == 1) samples = timeSm[1].get();
+        else samples = timeSm[0].get();
+        return std::max (0.001f, samples / (float) sr);
+    }
+
+    /** Coefficients that follow the delay time: every 32 samples, and only when the value moved by more than 1 %. */
+    void updateEngineCoefs (bool force)
+    {
+        auto moved = [force] (float now, float& last)
+        {
+            if (! force && std::fabs (now - last) <= 0.01f * std::fabs (last)) return false;
+            last = now;
+            return true;
+        };
+        for (int c = 0; c < 2; ++c)
+        {
+            const float t = engineTSec (c);
+            switch (eng.kind)
+            {
+                case EngineKind::tape:
+                {
+                    const float speed = clampv (0.25f / t, 0.125f, 4.0f);
+                    const float gap = clampv (eng.gapHz * speed, 2000.0f, 0.45f * (float) sr);
+                    if (moved (gap, lastGap[c])) gapLp[c].set (Biquad::Type::lowPass, gap, 0.707f, 0.0f, sr);
+                    const float hb = clampv (70.0f * speed, 25.0f, 250.0f);
+                    if (moved (hb, lastBump[c])) bump[c].set (hb, eng.bumpDb);
+                    break;
+                }
+                case EngineKind::bbd:
+                {
+                    const float d = t * eng.bbdScale;
+                    if (moved (d, lastBbd[c])) bbd[c].setDelaySeconds (d);
+                    break;
+                }
+                case EngineKind::digital:
+                {
+                    float r = 1.0f;
+                    if (eng.memSamples > 0.0f) r = clampv (eng.memSamples / t, 4000.0f, (float) sr) / (float) sr;
+                    if (moved (r, lastFs[c])) fsRatio[c] = r;
+                    break;
+                }
+                default: break;
+            }
+        }
+    }
+
+    /** Per sample: tape wow/flutter on the read times, the smear and fade oscillators. Returns the radio fade gain. */
+    float engineTick (float* mod)
+    {
+        auto adv = [] (float& ph, float inc) { ph += inc; if (ph >= 1.0f) ph -= 1.0f; };
+        float fade = 1.0f;
+        switch (eng.kind)
+        {
+            case EngineKind::tape:
+                if (! params.freeze && (eng.wow > 0.0f || eng.flutter > 0.0f))
+                {
+                    wowRate = clampv (wowRate + 0.004f * std::sqrt (48000.0f / (float) sr) * wowNoise.white(), 0.5f, 1.5f);
+                    adv (wowPh, wowRate / (float) sr);
+                    const float fs = 1.0f / (float) sr;
+                    adv (flutPh[0], 6.5f * fs); adv (flutPh[1], 9.2f * fs); adv (flutPh[2], 11.7f * fs);
+                    const float w = 0.0015f * eng.wow * std::sin (2.0f * kPi * wowPh);
+                    const float f = 0.0004f * eng.flutter * (0.5f * std::sin (2.0f * kPi * flutPh[0]) + 0.3f * std::sin (2.0f * kPi * flutPh[1])
+                                                             + 0.2f * std::sin (2.0f * kPi * flutPh[2]));
+                    mod[0] += w + f; mod[1] += w + f;
+                }
+                break;
+            case EngineKind::spring:
+                adv (springPh, clampv (eng.smearHz, 0.0f, 20.0f) / (float) sr);
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float ms = kSmearMs[k] * eng.smearSize + eng.smearModMs * std::sin (2.0f * kPi * (springPh + 0.25f * (float) k));
+                    springLen[k] = clampv (ms * 0.001f * (float) sr, 1.0f, (float) spr[0][0].capacity() - 2.0f);
+                }
+                break;
+            case EngineKind::radio:
+                if (eng.fadeDepth > 0.0f)
+                {
+                    adv (fadePh, eng.fadeHz / (float) sr);
+                    fade = 1.0f - eng.fadeDepth * 0.5f * (1.0f - std::cos (2.0f * kPi * fadePh));
+                }
+                break;
+            default: break;
+        }
+        return fade;
+    }
+
+    /** One pass through the machine's colour (inside the loop). */
+    float engine (int c, float x)
+    {
+        switch (eng.kind)
+        {
+            case EngineKind::tape:
+            {
+                float u = preEmph[c].process (x);
+                if (eng.hystMix > 0.0f) u = (1.0f - eng.hystMix) * u + eng.hystMix * hyst[c].process (u * eng.tapeDrive) / eng.tapeDrive;
+                u = deEmph[c].process (u);
+                return bump[c].process (gapLp[c].process (u));
+            }
+            case EngineKind::bbd:
+            {
+                float u = eng.compander ? comp[c].compress (x) : x;
+                u = bbd[c].post (bbd[c].pre (u));
+                return eng.compander ? comp[c].expand (u) : u;
+            }
+            case EngineKind::radio:
+            {
+                float u = rad[c][3].process (rad[c][2].process (rad[c][1].process (rad[c][0].process (x))));
+                return std::tanh (eng.drive * (u + eng.asym * u * u)) / eng.drive;
+            }
+            case EngineKind::spring:
+            {
+                const float g = 0.6f * clampv (eng.smearAmt, 0.0f, 1.0f);
+                for (int k = 0; k < 4; ++k)
+                {
+                    auto& d = spr[c][k];
+                    const float delayed = d.readFrac (springLen[k]);
+                    const float v = x + g * delayed;
+                    d.push (undenorm (v));
+                    x = delayed - g * v;
+                }
+                return x;
+            }
+            case EngineKind::digital:
+            default:
+            {
+                if (eng.memSamples > 0.0f)
+                {
+                    shAcc[c] += fsRatio[c];
+                    if (shAcc[c] >= 1.0f) { shAcc[c] -= 1.0f; shHeld[c] = x; }
+                    x = shHeld[c];
+                }
+                if (eng.bits > 0)
+                {
+                    const float q = (float) (1 << (eng.bits - 1));
+                    x = std::trunc (x * q) / q;
+                }
+                return x;
+            }
+        }
+    }
+
+    /** Noise and fade go on the wet output only, never into the loop. The noise gate follows the echo level. */
+    float engineOut (int c, float e, float fade)
+    {
+        if (noiseLin <= 0.0f && fade == 1.0f) return e;
+        float n = 0.0f;
+        if (noiseLin > 0.0f)
+        {
+            nzEnv[c] = undenorm (std::max (std::fabs (e), nzEnv[c] * envRel));
+            const float gate = clampv ((nzEnv[c] - 0.0003f) / 0.0027f, 0.0f, 1.0f);
+            if (gate > 0.0f)
+            {
+                n = noiseLin * gate * (eng.kind == EngineKind::tape ? nz[c].pink() : nz[c].white());
+                if (eng.kind == EngineKind::bbd && eng.compander) n *= clampv (nzEnv[c] / 0.1f, 0.25f, 1.0f);
+            }
+        }
+        return e * fade + n;
+    }
+
+    /** What happens to the signal each time round the loop: filters, decay EQ, engine, saturation, diffusion. */
     float chain (int c, float x)
     {
         if (params.freeze) return safety (x);
@@ -390,6 +647,7 @@ private:
         x = bandL[c][1].process (bandL[c][0].process (x));
         x = bandH[c][1].process (bandH[c][0].process (x));
         x = dHigh[c].process (dMid[c].process (dLow[c].process (x)));
+        x = engine (c, x);
         if (params.style.satType == 3)
         {
             const float a = std::fabs (x);

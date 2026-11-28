@@ -207,3 +207,12 @@ TEST_CASE ("Review fix: Echo presets and A/B keep the rhythm pattern")
     pm.load (EffectId::echo, f.category, f.name);
     REQUIRE (pr.p.getEchoPattern().count == 0); // factory presets use Repeats + Grid
 }
+
+#include "../Source/Params/EchoParams.h"
+
+TEST_CASE ("Echo: the chosen style picks its engine")
+{
+    Proc pr;
+    pr.set ("echo_style", 11.0f);
+    REQUIRE (ptfx::params::readEcho (pr.p.apvts).styleIndex == 11);
+}

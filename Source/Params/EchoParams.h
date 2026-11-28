@@ -108,6 +108,7 @@ inline Echo::Params readEcho (const APVTS& s)
     e.panShape = geti (s, "echo_pan");
     e.duck = get (s, "echo_duck") * 0.01f;
     e.freeze = getb (s, "echo_freeze");
+    e.styleIndex = geti (s, "echo_style");
     auto& st = e.style;
     st.bandLowHz = get (s, "echo_s_bandlo");
     st.bandHighHz = get (s, "echo_s_bandhi");
