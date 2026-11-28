@@ -61,7 +61,7 @@ public:
     bool canUndo() const override { return history.canUndo(); }
 
     /** Every effect reports this latency, so switching never shifts the track in time. */
-    static constexpr int kLatency = ptfx::Oversampler2x::latency();
+    static constexpr int kLatency = ptfx::Oversampler4x::latency();
 
     juce::AudioProcessorValueTreeState apvts;
     ptfx::PresetManager presets { apvts, [this] { return getActiveEffect(); }, ptfx::PresetManager::defaultUserRoot(),

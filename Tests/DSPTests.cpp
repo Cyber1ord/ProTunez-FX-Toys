@@ -100,6 +100,27 @@ float heatThd (int style)
     for (int k = 2; k <= 9; ++k) { const float hk = toneLevel (s.l, 200.0f * (float) k, 24000); sum += (double) hk * hk; }
     return (float) (std::sqrt (sum) / f1);
 }
+
+/** THD (harmonics 2..7) of one Heat style at a given frequency, drive and amplitude; 1 s, first 24000 samples skipped. */
+float heatThdAt (int style, float freq, float drive, float amp)
+{
+    auto p = cleanHeat(); p.style = style; p.drive = drive;
+    Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+    auto s = sine (48000, freq, amp);
+    run (h, s);
+    const float f1 = toneLevel (s.l, freq, 24000);
+    double sum = 0;
+    for (int k = 2; k <= 7; ++k) { const float hk = toneLevel (s.l, freq * (float) k, 24000); sum += (double) hk * hk; }
+    return (float) (std::sqrt (sum) / f1);
+}
+
+/** Like sine(), but continues a sine that already ran for `start` samples. */
+Stereo sineAt (int n, float freq, float amp, int start)
+{
+    Stereo s (n);
+    for (int i = 0; i < n; ++i) s.l[(size_t) i] = s.r[(size_t) i] = amp * std::sin (2.0f * kPi * freq * (float) (i + start) / (float) kSr);
+    return s;
+}
 } // namespace
 
 TEST_CASE ("Heat: silence stays silent and extreme settings stay finite in every style")
@@ -228,6 +249,129 @@ TEST_CASE ("Heat: the attitude meter rises with Drive")
     };
     REQUIRE (meterAt (8.0f) > meterAt (2.0f) + 0.1f);
     REQUIRE (meterAt (10.0f) <= 1.0f);
+}
+
+TEST_CASE ("Heat: style A has a tape head bump at 80 Hz at low drive")
+{
+    auto p = cleanHeat(); p.style = Heat::styleA; p.drive = 1.0f;
+    const float bump = heatGainDb (p, 80.0f, 0.01f) - heatGainDb (p, 1000.0f, 0.01f);
+    REQUIRE (bump >= 1.0f);
+    REQUIRE (bump <= 3.0f);
+}
+
+TEST_CASE ("Heat: triode and pentode sag on sustained loud parts")
+{
+    for (int style : { (int) Heat::styleT, (int) Heat::styleP })
+    {
+        auto p = cleanHeat(); p.style = style; p.drive = 8.0f;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        auto s = sine (48000, 300.0f, 0.1f);
+        run (h, s);
+        const float dip = gainToDb (rms (s.l, 240, 720) / rms (s.l, 14400, 19200));
+        INFO ("style " << style << " dip " << dip << " dB");
+        REQUIRE (dip >= 1.0f);
+    }
+}
+
+TEST_CASE ("Heat: console and preamp distort low notes more than high notes")
+{
+    for (int style : { (int) Heat::styleE, (int) Heat::styleN })
+    {
+        const float low = heatThdAt (style, 80.0f, 1.0f, 0.05f), high = heatThdAt (style, 2000.0f, 1.0f, 0.05f);
+        INFO ("style " << style << " low " << low << " high " << high);
+        REQUIRE (low > 1.3f * high);
+    }
+}
+
+TEST_CASE ("Heat: the triode's even/odd harmonic balance changes with level")
+{
+    auto evenOdd = [] (float amp)
+    {
+        auto p = cleanHeat(); p.style = Heat::styleT; p.drive = 3.0f;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        auto s = sine (48000, 200.0f, amp);
+        run (h, s);
+        auto t = [&] (int k) { return toneLevel (s.l, 200.0f * (float) k, 24000); };
+        return std::hypot (t (2), t (4)) / std::hypot (t (3), t (5));
+    };
+    const float quiet = evenOdd (dbToGain (-30.0f)), loud = evenOdd (dbToGain (-6.0f));
+    INFO ("quiet " << quiet << " loud " << loud);
+    REQUIRE (quiet > 2.0f * loud);
+}
+
+TEST_CASE ("Heat: Auto keeps every style within 3 dB of the input at drive 6, also after a style change")
+{
+    for (int a = 0; a < Heat::numStyles; ++a)
+        for (int b = 0; b < Heat::numStyles; ++b)
+        {
+            if (a == b) continue;
+            auto p = cleanHeat(); p.style = a; p.drive = 6.0f; p.autoGain = true;
+            Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+            auto s1 = sineAt (48000, 200.0f, 0.3f, 0);
+            run (h, s1);
+            p.style = b;
+            h.setParams (p);
+            auto s2 = sineAt (48000, 200.0f, 0.3f, 48000);
+            run (h, s2);
+            const float ref = 0.3f / std::sqrt (2.0f);
+            for (auto* s : { &s1, &s2 })
+                for (size_t from = 4800; from + 2400 <= s->l.size(); from += 2400)
+                {
+                    const float db = gainToDb (rms (s->l, from, from + 2400) / ref);
+                    INFO ("styles " << a << " -> " << b << " window at " << from << ": " << db << " dB");
+                    CHECK (std::fabs (db) <= 3.0f);
+                }
+        }
+}
+
+TEST_CASE ("Heat: every style processes 1 s of 48 kHz stereo in under 250 ms")
+{
+    for (int style = 0; style < Heat::numStyles; ++style)
+    {
+        auto p = cleanHeat(); p.style = style; p.drive = 10.0f; p.punish = true; p.autoGain = true; p.mix = 0.5f;
+        p.lowCutHz = 200.0f; p.thump = true; p.highCutHz = 5000.0f; p.steep = true; p.tone = 0.5f;
+        Heat h; h.setParams (p); h.prepare (kSr, kBlock);
+        auto s = sine (48000, 220.0f, 0.5f);
+        const auto t0 = std::chrono::steady_clock::now();
+        run (h, s);
+        const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+        INFO ("style " << style << ": " << ms << " ms");
+        UNSCOPED_INFO ("Heat CPU style " << style << ": " << ms << " ms");
+        REQUIRE (ms < 250.0);
+    }
+}
+
+TEST_CASE ("Heat: every style is silent, DC-free, finite and lets go at 44.1 and 96 kHz")
+{
+    for (double rate : { 44100.0, 96000.0 })
+        for (int style = 0; style < Heat::numStyles; ++style)
+        {
+            auto p = cleanHeat(); p.style = style; p.drive = 10.0f; p.punish = true; p.autoGain = true; p.thump = true; p.steep = true;
+            Heat h; h.setParams (p); h.prepare (rate, kBlock);
+            const int n = (int) rate;
+            auto runAt = [&] (Stereo& s) { for (size_t i = 0; i < s.l.size(); i += kBlock) { const int m = (int) std::min ((size_t) kBlock, s.l.size() - i); h.process (s.l.data() + i, s.r.data() + i, m); } };
+            INFO ("style " << style << " rate " << rate);
+
+            Stereo quiet (n); runAt (quiet);
+            REQUIRE (peak (quiet.l) < 1.0e-6f);
+
+            Stereo sq (n);
+            for (int i = 0; i < n; ++i) sq.l[(size_t) i] = sq.r[(size_t) i] = ((i / 50) % 2 == 0) ? 1.0f : -1.0f;
+            runAt (sq);
+            REQUIRE (allFinite (sq));
+            REQUIRE (peak (sq.l) < 4.0f);
+
+            Stereo dc (2 * n);
+            for (auto& v : dc.l) v = 0.5f;
+            for (auto& v : dc.r) v = 0.5f;
+            runAt (dc);
+            REQUIRE (allFinite (dc));
+            double mean = 0; for (int i = n; i < 2 * n; ++i) mean += dc.l[(size_t) i];
+            REQUIRE (std::fabs (mean / n) < 1.0e-3);
+
+            Stereo tail (n); runAt (tail);
+            REQUIRE (peak (tail.l, (size_t) (n / 2)) < 1.0e-6f);
+        }
 }
 
 namespace

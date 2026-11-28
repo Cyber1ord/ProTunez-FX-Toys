@@ -156,7 +156,7 @@ TEST_CASE ("Review fix: reported latency never changes and every effect lines up
     Proc pr;
     pr.set ("heat_mix", 0.0f); pr.set ("echo_mix", 0.0f); pr.set ("plate_mix", 0.0f);
     const int lat = pr.p.getLatencySamples();
-    REQUIRE (lat == ptfx::Oversampler2x::latency());
+    REQUIRE (lat == ptfx::Oversampler4x::latency());
     for (int e : { 0, 1, 2, 3 })
     {
         pr.set ("effect", (float) e);
