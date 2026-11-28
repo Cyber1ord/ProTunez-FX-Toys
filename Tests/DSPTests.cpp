@@ -855,14 +855,14 @@ Plate::Params wetPlate()
 }
 
 /** Decay time (RT60) of an impulse response, measured in the 500 Hz band from the -5 to -25 dB slope. */
-float measureRt60 (Plate::Params p, double sr = kSr)
+float measureRt60 (Plate::Params p, double sr = kSr, float bandHz = 500.0f)
 {
     Plate pl; pl.setParams (p); pl.prepare (sr, kBlock);
     const int n = (int) (sr * std::max (4.0f, p.decaySec * 1.6f));
     std::vector<float> l ((size_t) n, 0.0f), r ((size_t) n, 0.0f);
     l[0] = r[0] = 1.0f;
     for (int i = 0; i < n; i += kBlock) pl.process (l.data() + i, r.data() + i, std::min (kBlock, n - i));
-    Biquad bp; bp.set (Biquad::Type::bandPass, 500.0f, 1.4f, 0.0f, sr);
+    Biquad bp; bp.set (Biquad::Type::bandPass, bandHz, 1.4f, 0.0f, sr);
     const int win = (int) (0.05 * sr);
     std::vector<float> db;
     for (int i = 0; i + win <= n; i += win)
@@ -881,6 +881,29 @@ float measureRt60 (Plate::Params p, double sr = kSr)
     if (i5 < 0 || i25 < 0) return 1.0e9f; // never got 25 dB down: very long
     const float seconds = (float) (i25 - i5) * 0.05f;
     return 60.0f * seconds / 20.0f;
+}
+
+Stereo squareFs (int n, double sr)
+{
+    (void) sr;
+    Stereo s (n);
+    for (int i = 0; i < n; ++i) s.l[(size_t) i] = s.r[(size_t) i] = ((i / 50) % 2 == 0) ? 1.0f : -1.0f;
+    return s;
+}
+
+/** Share of a band's energy that falls in the first `sec` seconds. */
+float bandShareFirst (const std::vector<float>& v, float hz, double sr, double sec)
+{
+    Biquad bp; bp.set (Biquad::Type::bandPass, hz, 1.4f, 0.0f, sr);
+    const size_t first = (size_t) (sec * sr);
+    double e1 = 0.0, tot = 0.0;
+    for (size_t i = 0; i < v.size(); ++i)
+    {
+        const double y = bp.process (v[i]);
+        tot += y * y;
+        if (i < first) e1 += y * y;
+    }
+    return (float) (e1 / std::max (tot, 1.0e-30));
 }
 
 float plateThd (int preamp)
@@ -998,6 +1021,167 @@ TEST_CASE ("Plate: infinite decay with loud input for 10 seconds at 192 kHz stay
     float pk = 0.0f;
     for (float v : l) { REQUIRE (std::isfinite (v)); pk = std::max (pk, std::fabs (v)); }
     REQUIRE (pk < dbToGain (12.0f));
+}
+
+TEST_CASE ("Plate: dispersion makes the lows of an impulse arrive later")
+{
+    auto share = [] (int sections, double sr)
+    {
+        Plate::Dispersion d; d.prepare (sr, Plate::model (0).dispHz, sections);
+        std::vector<float> v ((size_t) (sr * 0.2));
+        for (size_t i = 0; i < v.size(); ++i) v[i] = d.process (i == 0 ? 1.0f : 0.0f);
+        return bandShareFirst (v, 300.0f, sr, 0.005);
+    };
+    REQUIRE (share (0, kSr) > 0.95f);
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+    {
+        const float sh = share (Plate::kDispSections, sr);
+        INFO ("sr " << sr << " share " << sh);
+        REQUIRE (sh < 0.8f);
+    }
+}
+
+TEST_CASE ("Plate: each band's per-pass gain follows its decay time")
+{
+    for (int m = 0; m < Plate::numModels; ++m)
+    {
+        const auto& md = Plate::model (m);
+        const auto g = Plate::bandGains (m, 0.5f, 0.05f);
+        REQUIRE (g.mid == Approx (std::pow (10.0f, -0.075f)).epsilon (1e-5));
+        REQUIRE (g.low == Approx (std::pow (10.0f, -0.075f / md.lowX)).epsilon (1e-5));
+        REQUIRE (g.high == Approx (std::pow (10.0f, -0.075f / md.highX)).epsilon (1e-5));
+        REQUIRE (g.low > g.high);
+        const auto e = Plate::bandGains (m, 0.0f, 0.05f);
+        REQUIRE (e.low == 1.0f); REQUIRE (e.mid == 1.0f); REQUIRE (e.high == 1.0f);
+    }
+}
+
+TEST_CASE ("Plate: lows ring longer than highs on every model")
+{
+    for (int m = 0; m < Plate::numModels; ++m)
+    {
+        auto p = wetPlate(); p.model = m; p.decaySec = 4.0f;
+        const float rt125 = measureRt60 (p, kSr, 125.0f), rt8k = measureRt60 (p, kSr, 8000.0f), rt500 = measureRt60 (p, kSr, 500.0f);
+        INFO ("model " << m << " rt125 " << rt125 << " rt500 " << rt500 << " rt8k " << rt8k);
+        REQUIRE (rt125 > 1.15f * rt8k);
+        REQUIRE (rt8k < 0.9f * rt500);
+    }
+}
+
+TEST_CASE ("Plate: every model hits 4 s and 6 s decays within 10 %")
+{
+    for (int m = 0; m < Plate::numModels; ++m)
+        for (float d : { 4.0f, 6.0f })
+        {
+            auto p = wetPlate(); p.model = m; p.decaySec = d;
+            const float rt = measureRt60 (p);
+            INFO ("model " << m << " decay " << d << " RT60 " << rt);
+            REQUIRE (rt == Approx (d).epsilon (0.1));
+        }
+}
+
+TEST_CASE ("Plate: 60 s decay with full-scale input stays finite and bounded on every model")
+{
+    for (int m = 0; m < Plate::numModels; ++m)
+        for (int pre = 0; pre < Plate::numPreamps; ++pre)
+        {
+            auto p = wetPlate(); p.model = m; p.preamp = pre; p.decaySec = 59.0f; p.modDepth = 1.0f; p.inDb = 24.0f;
+            Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+            for (float d : { 59.0f, Plate::kInfinite })
+            {
+                p.decaySec = d; pl.setParams (p);
+                auto s = squareFs ((int) kSr * 10, kSr);
+                run (pl, s);
+                INFO ("model " << m << " preamp " << pre << " decay " << d);
+                REQUIRE (allFinite (s));
+                REQUIRE (peak (s.l) < 4.0f); REQUIRE (peak (s.r) < 4.0f);
+            }
+        }
+}
+
+TEST_CASE ("Plate: every model processes 1 s of 48 kHz stereo in under 250 ms")
+{
+    for (int m = 0; m < Plate::numModels; ++m)
+    {
+        auto p = wetPlate(); p.model = m; p.preamp = Plate::tube; p.decaySec = 5.0f; p.modDepth = 1.0f; p.preDelayMs = 40.0f;
+        p.highHz = 8000.0f; p.eq1G = 3.0f; p.eq2G = -3.0f; p.duck = 0.5f;
+        Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+        auto s = sine ((int) kSr, 220.0f, 0.5f);
+        const auto t0 = std::chrono::steady_clock::now();
+        run (pl, s);
+        const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+        UNSCOPED_INFO ("Plate model " << m << ": " << ms << " ms per 1 s");
+        REQUIRE (ms < 250.0);
+    }
+}
+
+TEST_CASE ("Plate: every model is silent, DC-free, finite and lets go at 44.1 and 96 kHz")
+{
+    for (double sr : { 44100.0, 96000.0 })
+        for (int m = 0; m < Plate::numModels; ++m)
+        {
+            auto p = wetPlate(); p.model = m; p.preamp = Plate::tube; p.modDepth = 0.5f; p.decaySec = 2.0f;
+            Plate pl; pl.setParams (p); pl.prepare (sr, kBlock);
+            const int one = (int) sr;
+            auto runN = [&] (Stereo& s)
+            {
+                for (size_t i = 0; i < s.l.size(); i += kBlock)
+                    pl.process (s.l.data() + i, s.r.data() + i, (int) std::min ((size_t) kBlock, s.l.size() - i));
+            };
+            INFO ("sr " << sr << " model " << m);
+            Stereo sil (one); runN (sil);
+            REQUIRE (peak (sil.l) < 1.0e-6f); REQUIRE (peak (sil.r) < 1.0e-6f);
+            auto sq = squareFs (one, sr); runN (sq);
+            REQUIRE (allFinite (sq)); REQUIRE (peak (sq.l) < 4.0f);
+            Stereo dc (3 * one);
+            std::fill (dc.l.begin(), dc.l.end(), 0.5f); dc.r = dc.l;
+            runN (dc);
+            double mean = 0.0;
+            for (size_t i = (size_t) (2 * one); i < dc.l.size(); ++i) mean += dc.l[i];
+            REQUIRE (std::fabs (mean / one) < 1.0e-3);
+            Stereo tail (8 * one); runN (tail);
+            REQUIRE (peak (tail.l, (size_t) (6 * one)) < 1.0e-6f);
+            REQUIRE (peak (tail.r, (size_t) (6 * one)) < 1.0e-6f);
+        }
+}
+
+TEST_CASE ("Plate: freeze on then off holds and then lets the tail go")
+{
+    auto p = wetPlate(); p.decaySec = 1.0f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    auto fill = sine ((int) (kSr * 0.5), 300.0f, 0.3f);
+    run (pl, fill);
+    p.freeze = true; pl.setParams (p);
+    Stereo held ((int) kSr * 3);
+    run (pl, held);
+    const float a = rms (held.l, (size_t) (kSr * 0.5), (size_t) (kSr * 1.5)), b = rms (held.l, (size_t) kSr * 2, (size_t) kSr * 3);
+    REQUIRE (a > 1.0e-3f);
+    REQUIRE (std::fabs (gainToDb (b / a)) < 3.0f);
+    p.freeze = false; pl.setParams (p);
+    Stereo after ((int) kSr * 3);
+    run (pl, after);
+    REQUIRE (allFinite (after));
+    REQUIRE (rms (after.l, (size_t) (kSr * 2.5), (size_t) (kSr * 3)) < 1.0e-5f);
+}
+
+TEST_CASE ("Plate: changing Decay mid-tail glides and takes effect")
+{
+    auto p = wetPlate(); p.decaySec = 6.0f;
+    Plate pl; pl.setParams (p); pl.prepare (kSr, kBlock);
+    Stereo s ((int) kSr * 3);
+    for (int i = 0; i < (int) (kSr * 0.1); ++i) s.l[(size_t) i] = s.r[(size_t) i] = 0.5f * std::sin (0.05f * (float) i);
+    for (size_t i = 0; i < s.l.size(); i += kBlock)
+    {
+        if (i >= (size_t) kSr && p.decaySec == 6.0f) { p.decaySec = 0.5f; pl.setParams (p); }
+        if (i >= (size_t) kSr * 2 && p.decaySec < Plate::kInfinite) { p.decaySec = Plate::kInfinite; pl.setParams (p); }
+        pl.process (s.l.data() + i, s.r.data() + i, (int) std::min ((size_t) kBlock, s.l.size() - i));
+    }
+    REQUIRE (allFinite (s));
+    float maxStep = 0.0f;
+    for (size_t i = 1; i < s.l.size(); ++i) maxStep = std::max (maxStep, std::fabs (s.l[i] - s.l[i - 1]));
+    REQUIRE (maxStep < 0.25f);
+    const float r1 = rms (s.l, (size_t) (kSr * 1.9), (size_t) (kSr * 2.0)), r0 = rms (s.l, (size_t) (kSr * 0.9), (size_t) kSr);
+    REQUIRE (gainToDb (r1 / r0) < -40.0f);
 }
 
 TEST_CASE ("Crossfader: switching effects ramps smoothly, never jumps")
